@@ -11,6 +11,11 @@ def convert_to_15fps(input_path, output_path=None):
         base, _ = os.path.splitext(input_path)
         output_path = f"{base}_15fps.mp4"
 
+    # Skip conversion if the 15fps processed video is already up to date
+    if os.path.exists(output_path) and os.path.exists(input_path):
+        if os.path.getmtime(output_path) >= os.path.getmtime(input_path):
+            return output_path
+
     try:
         stream = ffmpeg.input(input_path)
         # Apply the parameters from the TODO: -r 15 -c:v libx264 -crf 18 -preset slow
