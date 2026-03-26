@@ -16,9 +16,59 @@ class RotoScene(QGraphicsScene):
         self.main_window = None
 
     def mousePressEvent(self, event):
+        # Prevent dropping interactive points if the user is holding shift to pan
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            super().mousePressEvent(event)
+            return
+
         if self.main_window:
             self.main_window.scene_mousePressEvent(event)
         super().mousePressEvent(event)
+
+class RotoGraphicsView(QGraphicsView):
+    def __init__(self, scene, parent=None):
+        super().__init__(scene, parent)
+        self.setRenderHint(self.renderHints() | self.renderHints().Antialiasing)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self._is_panning = False
+        self._zoom_factor = 1.1
+
+    def wheelEvent(self, event):
+        if event.angleDelta().y() > 0:
+            self.scale(self._zoom_factor, self._zoom_factor)
+        else:
+            self.scale(1 / self._zoom_factor, 1 / self._zoom_factor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self._is_panning = True
+            super().mousePressEvent(event)
+        else:
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._is_panning:
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self._is_panning = False
+            super().mouseReleaseEvent(event)
+        else:
+            super().mouseReleaseEvent(event)
+            
+    def zoom_in(self):
+        self.scale(self._zoom_factor, self._zoom_factor)
+
+    def zoom_out(self):
+        self.scale(1 / self._zoom_factor, 1 / self._zoom_factor)
+
+    def reset_zoom(self):
+        self.resetTransform()
+
+    def zoom_to_fit(self):
+        if self.scene():
+            self.fitInView(self.scene().sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
 class RotoTool(QMainWindow):
     def __init__(self, initial_video=None):
@@ -35,11 +85,9 @@ class RotoTool(QMainWindow):
         # UI Setup
         self.scene = RotoScene()
         self.scene.main_window = self
-        self.view = QGraphicsView(self.scene)
-        self.view.setRenderHint(self.view.renderHints() | self.view.renderHints().Antialiasing)
         
-        # Disable scrollbars for a cleaner look if desired, but good to have if zoomed.
-        
+        # Use our custom View handles zooming and panning
+        self.view = RotoGraphicsView(self.scene)
         self.setCentralWidget(self.view)
         
         self.bg_item = QGraphicsPixmapItem()
@@ -80,6 +128,23 @@ class RotoTool(QMainWindow):
         self.clear_frame_action = QAction("Clear Current Frame", self)
         self.clear_frame_action.setShortcut(QKeySequence(Qt.Key.Key_Backspace))
         self.clear_frame_action.triggered.connect(self.clear_current_frame)
+
+        # View Menu Actions
+        self.zoom_in_action = QAction("Zoom In", self)
+        self.zoom_in_action.setShortcut(QKeySequence.StandardKey.ZoomIn)
+        self.zoom_in_action.triggered.connect(self.view.zoom_in)
+
+        self.zoom_out_action = QAction("Zoom Out", self)
+        self.zoom_out_action.setShortcut(QKeySequence.StandardKey.ZoomOut)
+        self.zoom_out_action.triggered.connect(self.view.zoom_out)
+
+        self.zoom_reset_action = QAction("Reset Zoom", self)
+        self.zoom_reset_action.setShortcut("Ctrl+0")
+        self.zoom_reset_action.triggered.connect(self.view.reset_zoom)
+        
+        self.zoom_fit_action = QAction("Zoom to Fit", self)
+        self.zoom_fit_action.setShortcut("Ctrl+F")
+        self.zoom_fit_action.triggered.connect(self.view.zoom_to_fit)
         
     def _create_menu(self):
         menubar = self.menuBar()
@@ -94,6 +159,12 @@ class RotoTool(QMainWindow):
         
         edit_menu = menubar.addMenu("Edit")
         edit_menu.addAction(self.clear_frame_action)
+
+        view_menu = menubar.addMenu("View")
+        view_menu.addAction(self.zoom_in_action)
+        view_menu.addAction(self.zoom_out_action)
+        view_menu.addAction(self.zoom_reset_action)
+        view_menu.addAction(self.zoom_fit_action)
 
     def open_video(self):
         filepath, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.mov *.avi)")
@@ -124,6 +195,7 @@ class RotoTool(QMainWindow):
         self.project.video_path = filepath
         self.setWindowTitle(f"Antigravity Roto-Tool - {os.path.basename(filepath)}")
         self.current_points = []
+        self.view.resetTransform()
         self.update_frame()
         
     def open_project(self):
@@ -231,11 +303,8 @@ class RotoTool(QMainWindow):
         elif event.button() == Qt.MouseButton.RightButton:
             if len(self.current_points) > 2:
                 self.project.add_polygon(self.current_game_frame, self.current_points)
-                self.current_points = []
-                self.redraw_polygons()
-            else:
-                self.current_points = []
-                self.redraw_polygons()
+            self.current_points = []
+            self.redraw_polygons()
 
     def keyPressEvent(self, event):
         if not self.cap:
@@ -255,8 +324,8 @@ class RotoTool(QMainWindow):
         elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
             if len(self.current_points) > 2:
                 self.project.add_polygon(self.current_game_frame, self.current_points)
-                self.current_points = []
-                self.redraw_polygons()
+            self.current_points = []
+            self.redraw_polygons()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
