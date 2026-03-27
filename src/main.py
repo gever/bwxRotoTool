@@ -18,9 +18,10 @@ class VertexHandleItem(QGraphicsEllipseItem):
         super().__init__(x, y, w, h, parent_poly)
         self.parent_poly = parent_poly
         self.index = index
-        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable | 
-                      QGraphicsItem.GraphicsItemFlag.ItemIsMovable | 
-                      QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable |
+                      QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
+                      QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges |
+                      QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
         self.setBrush(QBrush(QColor(255, 0, 0)))
         self.setPen(QPen(Qt.GlobalColor.black))
 
@@ -38,7 +39,11 @@ class RotoPolygonItem(QGraphicsPolygonItem):
         points = [QPointF(x, y) for x, y in self.poly_dict.get("points", [])]
         self.setPolygon(QPolygonF(points))
         
-        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable |
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
+            QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
         self.color = QColor(self.poly_dict.get("color", "#00ff00"))
         
         self.setBrush(QBrush(QColor(self.color.red(), self.color.green(), self.color.blue(), fill_alpha)))
@@ -62,7 +67,7 @@ class RotoPolygonItem(QGraphicsPolygonItem):
         poly = self.polygon()
         for i in range(poly.count()):
             pt = poly.at(i)
-            r = 16
+            r = 8
             # The rect is drawn around 0,0 locally, placed at pt
             handle = VertexHandleItem(-r/2, -r/2, r, r, self, i)
             handle.setPos(pt)
@@ -84,7 +89,10 @@ class RotoPolygonItem(QGraphicsPolygonItem):
 
     def get_dict(self):
         poly = self.polygon()
-        points = [[poly.at(i).x(), poly.at(i).y()] for i in range(poly.count())]
+        # Use mapToScene so coordinates are correct even after the item has been
+        # dragged (moving the item changes pos(), not the raw polygon points).
+        points = [[self.mapToScene(poly.at(i)).x(), self.mapToScene(poly.at(i)).y()]
+                  for i in range(poly.count())]
         self.poly_dict["points"] = points
         self.poly_dict["color"] = self.color.name()
         self.poly_dict["z_index"] = self.z_val
@@ -204,6 +212,12 @@ class RotoTool(QMainWindow):
         self.temp_dots = []
         self.current_polygon_color = QColor(0, 255, 0)
         self.opaque_fill = False   # Space toggles transparent ↔ opaque fill
+
+        # Copy buffer: holds a polygon dict ready to paste
+        self.copy_buffer: dict | None = None
+
+        # Onion-skin mode: None | "prev" | "both"
+        self.onion_mode: str | None = None
 
         # Color history (up to 16, most recent first)
         self.color_history: list[QColor] = []
@@ -407,10 +421,35 @@ class RotoTool(QMainWindow):
         self.current_points = []
         self.redraw_polygons()
             
+    def _draw_onion_skins(self):
+        """Render ghost polygons from neighbouring frames below the live layer."""
+        if not self.onion_mode:
+            return
+        frames_to_show = []
+        if self.onion_mode in ("prev", "both") and self.current_game_frame > 0:
+            frames_to_show.append((self.current_game_frame - 1, QColor(255, 80, 80)))   # red-tinted
+        if self.onion_mode == "both" and self.current_game_frame < self.total_frames - 1:
+            frames_to_show.append((self.current_game_frame + 1, QColor(80, 80, 255)))   # blue-tinted
+
+        for frame_idx, tint in frames_to_show:
+            for poly_dict in self.project.get_polygons(frame_idx):
+                pts = poly_dict.get("points", [])
+                if len(pts) > 2:
+                    qpoly = QPolygonF([QPointF(x, y) for x, y in pts])
+                    ghost = self.scene.addPolygon(
+                        qpoly,
+                        QPen(tint, 1, Qt.PenStyle.DashLine),
+                        QBrush(QColor(tint.red(), tint.green(), tint.blue(), 40))
+                    )
+                    ghost.setZValue(-1)   # below live polygons, above background
+
     def redraw_polygons(self):
         for item in self.scene.items():
             if item != self.bg_item:
                 self.scene.removeItem(item)
+
+        # Onion skins first (sit below live polys)
+        self._draw_onion_skins()
                 
         # Draw committed polygons via our new smart objects
         polys_dict_list = self.project.get_polygons(self.current_game_frame)
@@ -518,14 +557,43 @@ class RotoTool(QMainWindow):
         # Opaque / transparent fill toggle (Space)
         if key == Qt.Key.Key_Space:
             self.opaque_fill = not self.opaque_fill
-            # Immediately refresh all visible polygon brushes
             for item in self.scene.items():
                 if isinstance(item, RotoPolygonItem):
                     item.setBrush(self._fill_brush(item.color))
                     if item == self.active_edit_item:
-                        # Keep the dashed-white edit pen
                         item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
             self.set_status("EDIT MODE" if self.mode == "EDIT" else "DRAW MODE")
+            return
+
+        # Onion skin toggle  (o = prev only, Shift+O = prev+next)
+        if key == Qt.Key.Key_O:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Shift+O: toggle both-direction onion skin
+                self.onion_mode = None if self.onion_mode == "both" else "both"
+            else:
+                # o: toggle previous-frame onion skin
+                self.onion_mode = None if self.onion_mode == "prev" else "prev"
+            self.redraw_polygons()
+            onion_label = {None: "OFF", "prev": "PREV", "both": "PREV+NEXT"}.get(self.onion_mode, "")
+            self.set_status(f"Onion skin: {onion_label}")
+            return
+
+        # Copy polygon  (Ctrl+C)
+        if key == Qt.Key.Key_C and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            if self.mode == "EDIT" and self.active_edit_item:
+                import copy
+                self.copy_buffer = copy.deepcopy(self.active_edit_item.get_dict())
+                self.set_status(f"Copied polygon ({len(self.copy_buffer.get('points',[]))} pts)")
+            return
+
+        # Paste polygon  (Ctrl+V)
+        if key == Qt.Key.Key_V and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            if self.copy_buffer:
+                import copy
+                new_dict = copy.deepcopy(self.copy_buffer)
+                self.project.add_polygon(self.current_game_frame, new_dict)
+                self.redraw_polygons()
+                self.set_status(f"Pasted polygon to frame {self.current_game_frame}")
             return
 
         # Color Dialog (Ctrl+P)
