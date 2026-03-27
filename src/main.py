@@ -3,12 +3,90 @@ import sys
 import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
                              QGraphicsPixmapItem, QFileDialog, QMessageBox, QProgressDialog,
-                             QVBoxLayout, QWidget, QLabel, QToolBar)
+                             QVBoxLayout, QWidget, QLabel, QToolBar, QGraphicsPolygonItem, 
+                             QGraphicsEllipseItem, QGraphicsItem, QColorDialog)
 from PyQt6.QtGui import QImage, QPixmap, QAction, QPolygonF, QPen, QBrush, QColor, QKeySequence
 from PyQt6.QtCore import Qt, QPointF
 
 from video_processor import convert_to_15fps
 from project_model import RotoProject
+
+class VertexHandleItem(QGraphicsEllipseItem):
+    def __init__(self, x, y, w, h, parent_poly, index):
+        super().__init__(x, y, w, h, parent_poly)
+        self.parent_poly = parent_poly
+        self.index = index
+        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable | 
+                      QGraphicsItem.GraphicsItemFlag.ItemIsMovable | 
+                      QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setBrush(QBrush(QColor(255, 0, 0)))
+        self.setPen(QPen(Qt.GlobalColor.black))
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            # When dragged, tell parent polygon to adjust the point behind the scenes
+            self.parent_poly.update_handle_pos(self.index, value)
+        return super().itemChange(change, value)
+
+class RotoPolygonItem(QGraphicsPolygonItem):
+    def __init__(self, poly_dict, parent=None):
+        super().__init__(parent)
+        self.poly_dict = poly_dict.copy()
+        
+        points = [QPointF(x, y) for x, y in self.poly_dict.get("points", [])]
+        self.setPolygon(QPolygonF(points))
+        
+        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.color = QColor(self.poly_dict.get("color", "#00ff00"))
+        
+        self.setBrush(QBrush(QColor(self.color.red(), self.color.green(), self.color.blue(), 100)))
+        self.setPen(QPen(self.color, 2))
+        
+        self.z_val = self.poly_dict.get("z_index", 0)
+        self.setZValue(self.z_val)
+        
+        self.handles = []
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            is_selected = value
+            if is_selected:
+                if self.scene() and hasattr(self.scene(), "main_window"):
+                    if self.scene().main_window.active_edit_item != self:
+                        self.scene().main_window.enter_edit_mode(self)
+        return super().itemChange(change, value)
+
+    def show_handles(self):
+        poly = self.polygon()
+        for i in range(poly.count()):
+            pt = poly.at(i)
+            r = 16
+            # The rect is drawn around 0,0 locally, placed at pt
+            handle = VertexHandleItem(-r/2, -r/2, r, r, self, i)
+            handle.setPos(pt)
+            self.handles.append(handle)
+
+    def hide_handles(self):
+        scene = self.scene()
+        for h in self.handles:
+            if scene:
+                scene.removeItem(h)
+            elif h.scene():
+                h.scene().removeItem(h)
+        self.handles.clear()
+
+    def update_handle_pos(self, index, new_pos):
+        poly = self.polygon()
+        poly.replace(index, new_pos)
+        self.setPolygon(poly)
+
+    def get_dict(self):
+        poly = self.polygon()
+        points = [[poly.at(i).x(), poly.at(i).y()] for i in range(poly.count())]
+        self.poly_dict["points"] = points
+        self.poly_dict["color"] = self.color.name()
+        self.poly_dict["z_index"] = self.z_val
+        return self.poly_dict
 
 class RotoScene(QGraphicsScene):
     def __init__(self, parent=None):
@@ -16,14 +94,31 @@ class RotoScene(QGraphicsScene):
         self.main_window = None
 
     def mousePressEvent(self, event):
-        # Prevent dropping interactive points if the user is holding shift to pan
+        # Prevent picking/dropping points if the user is panning (shift)
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             super().mousePressEvent(event)
             return
 
         if self.main_window:
+            # If we are in the middle of drawing a polygon, ignore existing item selection
+            if self.main_window.mode == "DRAW" and len(self.main_window.current_points) > 0:
+                self.main_window.scene_mousePressEvent(event)
+                event.accept()
+                return
+
+            if self.main_window.mode == "EDIT":
+                # If they click the background, exit edit mode smoothly
+                item = self.itemAt(event.scenePos(), self.main_window.view.transform())
+                if item == self.main_window.bg_item:
+                    self.main_window.leave_edit_mode(save=True)
+                    event.accept()
+                    return
+            
+            super().mousePressEvent(event)
             self.main_window.scene_mousePressEvent(event)
-        super().mousePressEvent(event)
+        else:
+            super().mousePressEvent(event)
+
 
 class RotoGraphicsView(QGraphicsView):
     def __init__(self, scene, parent=None):
@@ -82,19 +177,23 @@ class RotoTool(QMainWindow):
         self.total_frames = 0
         self.current_project_file = None
 
+        # Draw vs Edit state
+        self.mode = "DRAW"
+        self.active_edit_item = None
+
         # UI Setup
         self.scene = RotoScene()
         self.scene.main_window = self
         
-        # Use our custom View handles zooming and panning
         self.view = RotoGraphicsView(self.scene)
+        self.view.setCursor(Qt.CursorShape.CrossCursor)
         self.setCentralWidget(self.view)
         
         self.bg_item = QGraphicsPixmapItem()
         self.scene.addItem(self.bg_item)
         
         # Status Label
-        self.status_label = QLabel("Frame: 0 / 0 | Ready")
+        self.status_label = QLabel("Frame: 0 / 0 | DRAW MODE")
         self.statusBar().addWidget(self.status_label)
 
         # Drawing state
@@ -126,10 +225,8 @@ class RotoTool(QMainWindow):
         self.export_bwx_action.triggered.connect(self.export_bwxbasic)
         
         self.clear_frame_action = QAction("Clear Current Frame", self)
-        self.clear_frame_action.setShortcut(QKeySequence(Qt.Key.Key_Backspace))
         self.clear_frame_action.triggered.connect(self.clear_current_frame)
 
-        # View Menu Actions
         self.zoom_in_action = QAction("Zoom In", self)
         self.zoom_in_action.setShortcut(QKeySequence.StandardKey.ZoomIn)
         self.zoom_in_action.triggered.connect(self.view.zoom_in)
@@ -169,7 +266,6 @@ class RotoTool(QMainWindow):
     def open_video(self):
         filepath, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.mov *.avi)")
         if filepath:
-            # Show a busy dialog
             progress = QProgressDialog("Processing video to 15 FPS...", "Cancel", 0, 0, self)
             progress.setWindowTitle("Processing")
             progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -183,8 +279,6 @@ class RotoTool(QMainWindow):
                 self.project = RotoProject()
                 self.project.video_path = out_file
                 self.load_video(out_file)
-            else:
-                QMessageBox.critical(self, "Error", "Failed to convert video.")
 
     def load_video(self, filepath):
         if self.cap:
@@ -208,15 +302,13 @@ class RotoTool(QMainWindow):
                 
                 if self.project.video_path and os.path.exists(self.project.video_path):
                     self.load_video(self.project.video_path)
-                else:
-                    QMessageBox.warning(self, "Warning", f"Video file not found at {self.project.video_path}")
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load project: {e}")
+                pass
 
     def save_project(self):
         if self.current_project_file:
             self.project.save(self.current_project_file)
-            self.status_label.setText(f"Frame: {self.current_game_frame} / {self.total_frames} | Saved")
+            self.set_status("Saved")
         else:
             self.save_project_as()
             
@@ -227,7 +319,7 @@ class RotoTool(QMainWindow):
                 filepath += '.bwxroto'
             self.project.save(filepath)
             self.current_project_file = filepath
-            self.status_label.setText(f"Frame: {self.current_game_frame} / {self.total_frames} | Saved")
+            self.set_status("Saved")
 
     def export_bwxbasic(self):
         filepath, _ = QFileDialog.getSaveFileName(self, "Export bwxBASIC", "", "Text Files (*.bas *.txt)")
@@ -235,7 +327,6 @@ class RotoTool(QMainWindow):
             if not filepath.endswith('.bas') and not filepath.endswith('.txt'):
                 filepath += '.bas'
             self.project.export_bwxbasic(filepath)
-            QMessageBox.information(self, "Exported", f"Successfully exported data to {os.path.basename(filepath)}")
 
     def update_frame(self):
         if not self.cap or self.total_frames == 0:
@@ -250,8 +341,8 @@ class RotoTool(QMainWindow):
             self.bg_item.setPixmap(QPixmap.fromImage(img))
             self.scene.setSceneRect(0, 0, w, h)
             
+            self.leave_edit_mode(save=False) # Safely drop unsaved drawing or editing when scrubbing frames
             self.redraw_polygons()
-            self.status_label.setText(f"Frame: {self.current_game_frame} / {self.total_frames} | Drawing")
             
     def clear_current_frame(self):
         self.project.clear_frame(self.current_game_frame)
@@ -259,21 +350,18 @@ class RotoTool(QMainWindow):
         self.redraw_polygons()
             
     def redraw_polygons(self):
-        # Remove old interactable polygon visual elements, keeping bg item
         for item in self.scene.items():
             if item != self.bg_item:
                 self.scene.removeItem(item)
                 
-        # Draw committed polygons
-        polygons = self.project.get_polygons(self.current_game_frame)
-        pen = QPen(QColor(0, 255, 0), 2)
-        brush = QBrush(QColor(0, 255, 0, 50))
-        for poly_points in polygons:
-            if len(poly_points) > 2:
-                qf = QPolygonF([QPointF(x, y) for x, y in poly_points])
-                self.scene.addPolygon(qf, pen, brush)
+        # Draw committed polygons via our new smart objects
+        polys_dict_list = self.project.get_polygons(self.current_game_frame)
+        for poly_dict in polys_dict_list:
+            if len(poly_dict.get("points", [])) > 2:
+                poly_item = RotoPolygonItem(poly_dict)
+                self.scene.addItem(poly_item)
             
-        # Draw current points / in-progress polygon
+        # Draw current points (in-progress drawing mode)
         self.temp_polygon_item = None
         self.temp_dots = []
         if self.current_points:
@@ -287,45 +375,126 @@ class RotoTool(QMainWindow):
                 self.temp_polygon_item = self.scene.addPolygon(qf, pen_blue, QBrush(Qt.BrushStyle.NoBrush))
 
     def scene_mousePressEvent(self, event):
-        if not self.cap:
+        if not self.cap or event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             return
             
         pos = event.scenePos()
+        clicked_item = self.scene.itemAt(pos, self.view.transform())
         
-        # We only accept clicks inside the bounds of the image
-        if not self.bg_item.boundingRect().contains(pos):
-            return
+        if self.mode == "DRAW":
+            if event.button() == Qt.MouseButton.LeftButton:
+                # If they clicked background, add point. If we already started a polygon, force add point ignoring items.
+                if clicked_item == self.bg_item or len(self.current_points) > 0:
+                    self.current_points.append([pos.x(), pos.y()])
+                    self.redraw_polygons()
+        # In edit mode, selection handles interaction, we don't drop points.
+
+    def enter_edit_mode(self, poly_item):
+        if self.active_edit_item and self.active_edit_item != poly_item:
+            # Cleanly save the old item without throwing us out of EDIT mode or destroying the scene
+            self.active_edit_item.hide_handles()
+            self.active_edit_item.setPen(QPen(self.active_edit_item.color, 2))
+            new_polys = []
+            items = sorted([it for it in self.scene.items() if isinstance(it, RotoPolygonItem)], key=lambda x: x.z_val)
+            for item in items:
+                new_polys.append(item.get_dict())
+            self.project.set_polygons(self.current_game_frame, new_polys)
+            self.active_edit_item = None
             
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.current_points.append([pos.x(), pos.y()])
-            self.redraw_polygons()
+        self.mode = "EDIT"
+        self.active_edit_item = poly_item
+        self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
+        self.active_edit_item.show_handles()
+        self.view.setCursor(Qt.CursorShape.ArrowCursor)
+        self.set_status("EDIT MODE - [Esc] to cancel, [Enter] to save")
+
+    def leave_edit_mode(self, save=True):
+        if self.mode == "EDIT" and self.active_edit_item:
+            self.active_edit_item.hide_handles()
+            self.active_edit_item.setPen(QPen(self.active_edit_item.color, 2))
             
-        elif event.button() == Qt.MouseButton.RightButton:
-            if len(self.current_points) > 2:
-                self.project.add_polygon(self.current_game_frame, self.current_points)
-            self.current_points = []
+            if save:
+                # Compile all current shapes back to json dict framework
+                new_polys = []
+                items = sorted([it for it in self.scene.items() if isinstance(it, RotoPolygonItem)], key=lambda x: x.z_val)
+                for item in items:
+                    new_polys.append(item.get_dict())
+                self.project.set_polygons(self.current_game_frame, new_polys)
+
+        self.mode = "DRAW"
+        self.active_edit_item = None
+        self.scene.clearSelection()
+        self.view.setCursor(Qt.CursorShape.CrossCursor)
+        self.set_status("DRAW MODE")
+        
+        if not save:
             self.redraw_polygons()
 
+    def set_status(self, msg):
+        self.status_label.setText(f"Frame: {self.current_game_frame} / {self.total_frames} | {msg}")
+
     def keyPressEvent(self, event):
-        if not self.cap:
+        if not self.cap: return
+        key = event.key()
+        
+        # Color Dialog (Ctrl+P)
+        if key == Qt.Key.Key_P and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            if self.mode == "EDIT" and self.active_edit_item:
+                color = QColorDialog.getColor(self.active_edit_item.color, self, "Select Polygon Color")
+                if color.isValid():
+                    self.active_edit_item.color = color
+                    self.active_edit_item.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 100)))
+                    self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
             return
             
-        if event.key() == Qt.Key.Key_D:
-            if self.current_game_frame < self.total_frames - 1:
-                self.current_game_frame += 1
+        if self.mode == "DRAW":
+            if key == Qt.Key.Key_D:
+                self.current_game_frame = min(self.total_frames - 1, self.current_game_frame + 1)
                 self.current_points = []
                 self.update_frame()
-        elif event.key() == Qt.Key.Key_A:
-            if self.current_game_frame > 0:
-                self.current_game_frame -= 1
+            elif key == Qt.Key.Key_A:
+                self.current_game_frame = max(0, self.current_game_frame - 1)
                 self.current_points = []
                 self.update_frame()
-        # Right Click closes, but let's add Enter key as an alternative
-        elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
-            if len(self.current_points) > 2:
-                self.project.add_polygon(self.current_game_frame, self.current_points)
-            self.current_points = []
-            self.redraw_polygons()
+            elif key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+                if len(self.current_points) > 2:
+                    poly_dict = {"points": self.current_points, "color": "#00ff00", "z_index": 0}
+                    self.project.add_polygon(self.current_game_frame, poly_dict)
+                self.current_points = []
+                self.redraw_polygons()
+            elif key == Qt.Key.Key_Escape:
+                self.current_points = []
+                self.redraw_polygons()
+                
+        elif self.mode == "EDIT":
+            if key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+                self.leave_edit_mode(save=True)
+            elif key == Qt.Key.Key_Escape:
+                self.leave_edit_mode(save=False)
+            elif key == Qt.Key.Key_Backspace or key == Qt.Key.Key_Delete:
+                for item in self.scene.selectedItems():
+                    if isinstance(item, VertexHandleItem):
+                        poly = item.parent_poly.polygon()
+                        if poly.count() > 3:
+                            poly.remove(item.index)
+                            item.parent_poly.setPolygon(poly)
+                            item.parent_poly.hide_handles()
+                            item.parent_poly.show_handles()
+                        else:
+                            self.scene.removeItem(item.parent_poly)
+                    elif isinstance(item, RotoPolygonItem):
+                        self.scene.removeItem(item)
+                        self.leave_edit_mode(save=True)
+            elif key == Qt.Key.Key_BracketRight:
+                if self.active_edit_item:
+                    inc = 100 if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else 1
+                    self.active_edit_item.z_val += inc
+                    self.active_edit_item.setZValue(self.active_edit_item.z_val)
+            elif key == Qt.Key.Key_BracketLeft:
+                if self.active_edit_item:
+                    dec = 100 if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else 1
+                    self.active_edit_item.z_val -= dec
+                    self.active_edit_item.setZValue(self.active_edit_item.z_val)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -1,5 +1,5 @@
 # Gemini Rules
-Ask user for permission before running any command-line tools.
+Ask user for permission before running any command-line tools that may change a file.
 
 Only operate on files in the current directory and subdirectories.
 
