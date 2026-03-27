@@ -4,8 +4,10 @@ import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
                              QGraphicsPixmapItem, QFileDialog, QMessageBox, QProgressDialog,
                              QVBoxLayout, QWidget, QLabel, QToolBar, QGraphicsPolygonItem, 
-                             QGraphicsEllipseItem, QGraphicsItem, QColorDialog)
+                             QGraphicsEllipseItem, QGraphicsItem)
 from PyQt6.QtGui import QImage, QPixmap, QAction, QPolygonF, QPen, QBrush, QColor, QKeySequence
+
+from color_picker import ColorPickerDialog
 from PyQt6.QtCore import Qt, QPointF
 
 from video_processor import convert_to_15fps
@@ -202,6 +204,9 @@ class RotoTool(QMainWindow):
         self.temp_dots = []
         self.current_polygon_color = QColor(0, 255, 0)
 
+        # Color history (up to 16, most recent first)
+        self.color_history: list[QColor] = []
+
         self._create_actions()
         self._create_menu()
         
@@ -220,6 +225,11 @@ class RotoTool(QMainWindow):
                 import json
                 with open(settings_path, "r") as f:
                     data = json.load(f)
+                # Restore colour history
+                for hex_str in data.get("color_history", []):
+                    c = QColor(hex_str)
+                    if c.isValid():
+                        self.color_history.append(c)
                 last_proj = data.get("last_project")
                 if last_proj and os.path.exists(last_proj):
                     reply = QMessageBox.question(self, "Resume Last Project", f"Would you like to resume your last project?\n\n{last_proj}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -230,13 +240,16 @@ class RotoTool(QMainWindow):
 
     def save_settings(self):
         settings_path = os.path.expanduser("~/.bwxrototool")
-        if self.current_project_file:
-            try:
-                import json
-                with open(settings_path, "w") as f:
-                    json.dump({"last_project": self.current_project_file}, f)
-            except Exception:
-                pass
+        try:
+            import json
+            data = {}
+            if self.current_project_file:
+                data["last_project"] = self.current_project_file
+            data["color_history"] = [c.name() for c in self.color_history[:16]]
+            with open(settings_path, "w") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
 
     def _create_actions(self):
         self.open_video_action = QAction("Open Video...", self)
@@ -470,6 +483,19 @@ class RotoTool(QMainWindow):
     def set_status(self, msg):
         self.status_label.setText(f"Frame: {self.current_game_frame} / {self.total_frames} | {msg}")
 
+    def _pick_color(self, initial: QColor) -> QColor | None:
+        """Open the custom color picker and return the chosen color (or None).
+        Automatically prepends the chosen color to self.color_history."""
+        color = ColorPickerDialog.pick(initial, self.color_history, self)
+        if color and color.isValid():
+            # Add to front of history, deduplicate, cap at 16
+            self.color_history = [c for c in self.color_history if c.name() != color.name()]
+            self.color_history.insert(0, color)
+            self.color_history = self.color_history[:16]
+            self.save_settings()
+            return color
+        return None
+
     def keyPressEvent(self, event):
         if not self.cap: return
         key = event.key()
@@ -477,16 +503,16 @@ class RotoTool(QMainWindow):
         # Color Dialog (Ctrl+P)
         if key == Qt.Key.Key_P and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
             if self.mode == "EDIT" and self.active_edit_item:
-                color = QColorDialog.getColor(self.active_edit_item.color, self, "Select Polygon Color")
-                if color.isValid():
+                color = self._pick_color(self.active_edit_item.color)
+                if color:
                     self.active_edit_item.color = color
                     self.current_polygon_color = color
                     self.active_edit_item.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 100)))
                     self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
             else:
                 # No polygon selected — pick the default draw color for new polygons
-                color = QColorDialog.getColor(self.current_polygon_color, self, "Select Default Draw Color")
-                if color.isValid():
+                color = self._pick_color(self.current_polygon_color)
+                if color:
                     self.current_polygon_color = color
             return
             
