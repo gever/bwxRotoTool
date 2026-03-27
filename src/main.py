@@ -483,6 +483,11 @@ class RotoTool(QMainWindow):
                     self.current_polygon_color = color
                     self.active_edit_item.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 100)))
                     self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
+            else:
+                # No polygon selected — pick the default draw color for new polygons
+                color = QColorDialog.getColor(self.current_polygon_color, self, "Select Default Draw Color")
+                if color.isValid():
+                    self.current_polygon_color = color
             return
             
         if self.mode == "DRAW":
