@@ -22,9 +22,11 @@ in the final engine.
 * `/video`: Source footage (Use Git LFS for these!).
 
 ## Quick Start
-1. Install dependencies: `pip install -r requirements.txt`
-2. Run the tool: `python src/main.py`
+1. Build the venv and install dependencies: `make setup`
+2. Run the tool: `make run`
 3. Load your iPhone footage and start "tinkering."
+
+> `make clean` removes the `.venv` if you need a fresh install.
 
 ## Documentation & Controls
 
@@ -49,6 +51,23 @@ The canvas supports seamless zooming and panning over high-definition details:
 - **Reset Zoom (100%):** `Ctrl + 0`
 - **Zoom to Fit:** `Ctrl + F`
 - **Pan Image:** Hold `Shift` and Left-Click Drag. *Note: Holding shift will temporarily disable polygon point placement to protect your drawings while you pan!*
+
+### Registration Point
+Each frame has a draggable **⊕ yellow crosshair** that marks the character's anchor (e.g. the ball of the foot). All exported coordinates are relative to this point, so the game engine can place the character independently of its position in the source video.
+- **Move Anchor:** Drag the ⊕ crosshair to the desired body landmark.
+- **Copy from Previous Frame:** `Shift+R` — snaps the current frame's anchor to the same position as the previous frame's anchor (great for thumbnails with minimal movement).
+- **Toggle Visibility:** `View → Show Registration Point` (`Ctrl+Shift+R`)
+
+### Playback Preview
+Open a non-modal animation preview window via **`Window → Open Playback Preview`** (`Ctrl+Shift+P`). The window plays back all rotoscoped frames at 15 FPS using registration-normalized coordinates (character centred at origin), independent of the background video.
+- **Play/Pause:** ⏸ / ▶ button
+- **Loop:** ⟳ Loop toggle
+- **Background Color:** Click the BG Color swatch to change the preview background.
+
+### Onion Skinning
+Ghost frames are automatically **registration-aligned** — the previous/next frame's pose is shifted so the character body overlaps the current frame, not the raw screen position.
+- **Previous frame only:** `O`
+- **Previous + next frames:** `Shift+O`
 
 ### Timeline Controls
 - **Next Frame:** `D`

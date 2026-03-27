@@ -4,14 +4,73 @@ import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
                              QGraphicsPixmapItem, QFileDialog, QMessageBox, QProgressDialog,
                              QVBoxLayout, QWidget, QLabel, QToolBar, QGraphicsPolygonItem, 
-                             QGraphicsEllipseItem, QGraphicsItem)
-from PyQt6.QtGui import QImage, QPixmap, QAction, QPolygonF, QPen, QBrush, QColor, QKeySequence
+                             QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem)
+from PyQt6.QtGui import (QImage, QPixmap, QAction, QPolygonF, QPen, QBrush, QColor,
+                         QKeySequence, QPainterPath)
+from PyQt6.QtCore import Qt, QPointF, QSizeF
 
 from color_picker import ColorPickerDialog
-from PyQt6.QtCore import Qt, QPointF
-
 from video_processor import convert_to_15fps
 from project_model import RotoProject
+from playback import PlaybackWindow
+
+# ── Registration crosshair marker ────────────────────────────────────────────
+
+class RegistrationMarkerItem(QGraphicsItem):
+    """Draggable ⊕ crosshair that marks the per-frame registration point.
+    Always rendered at a fixed screen size regardless of zoom level."""
+
+    RADIUS = 12   # screen-space radius in pixels
+    COLOR  = QColor(255, 220, 0)   # bright yellow
+
+    def __init__(self, on_moved=None):
+        super().__init__()
+        self._on_moved = on_moved   # callback(x, y) in scene coordinates
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
+            QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges |
+            QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations
+        )
+        self.setZValue(9999)   # always on top
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        self.setToolTip("Registration Point — drag to set the character anchor for this frame")
+
+    def boundingRect(self):
+        r = self.RADIUS + 2
+        from PyQt6.QtCore import QRectF
+        return QRectF(-r, -r, r * 2, r * 2)
+
+    def paint(self, painter, _option, _widget=None):
+        r = self.RADIUS
+        pen_outer = QPen(QColor(0, 0, 0, 160), 3)
+        pen_inner = QPen(self.COLOR, 2)
+
+        # Shadow ring
+        painter.setPen(pen_outer)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(0, 0), r, r)
+        painter.drawLine(QPointF(-r - 4, 0), QPointF(r + 4, 0))
+        painter.drawLine(QPointF(0, -r - 4), QPointF(0, r + 4))
+
+        # Bright crosshair
+        painter.setPen(pen_inner)
+        painter.drawEllipse(QPointF(0, 0), r, r)
+        painter.drawLine(QPointF(-r - 4, 0), QPointF(r + 4, 0))
+        painter.drawLine(QPointF(0, -r - 4), QPointF(0, r + 4))
+
+        # Centre dot
+        painter.setBrush(QBrush(self.COLOR))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(0, 0), 3, 3)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            if self._on_moved:
+                self._on_moved(value.x(), value.y())
+        return super().itemChange(change, value)
+
+
+# ── Vertex / polygon items ────────────────────────────────────────────────────
 
 class VertexHandleItem(QGraphicsEllipseItem):
     def __init__(self, x, y, w, h, parent_poly, index):
@@ -222,14 +281,19 @@ class RotoTool(QMainWindow):
         # Color history (up to 16, most recent first)
         self.color_history: list[QColor] = []
 
+        # Registration marker state
+        self.reg_marker: RegistrationMarkerItem | None = None
+        self.show_registration = True   # toggled via View menu
+
+        # Playback window (keeps a reference so it isn't garbage-collected)
+        self._playback_window: PlaybackWindow | None = None
+
         self._create_actions()
         self._create_menu()
         
         if initial_video and os.path.exists(initial_video):
             self.load_video(initial_video)
         else:
-            # We delay the message box slightly so the main window can render first, checking last project
-            import threading
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(100, self.check_last_project)
 
@@ -301,7 +365,19 @@ class RotoTool(QMainWindow):
         self.zoom_fit_action = QAction("Zoom to Fit", self)
         self.zoom_fit_action.setShortcut("Ctrl+F")
         self.zoom_fit_action.triggered.connect(self.view.zoom_to_fit)
-        
+
+        # Registration visibility toggle
+        self.show_reg_action = QAction("Show Registration Point", self)
+        self.show_reg_action.setCheckable(True)
+        self.show_reg_action.setChecked(True)
+        self.show_reg_action.setShortcut("Ctrl+Shift+R")
+        self.show_reg_action.triggered.connect(self._toggle_reg_visibility)
+
+        # Playback window
+        self.open_playback_action = QAction("Open Playback Preview", self)
+        self.open_playback_action.setShortcut("Ctrl+Shift+P")
+        self.open_playback_action.triggered.connect(self._open_playback_window)
+
     def _create_menu(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
@@ -321,9 +397,14 @@ class RotoTool(QMainWindow):
         view_menu.addAction(self.zoom_out_action)
         view_menu.addAction(self.zoom_reset_action)
         view_menu.addAction(self.zoom_fit_action)
+        view_menu.addSeparator()
+        view_menu.addAction(self.show_reg_action)
+
+        window_menu = menubar.addMenu("Window")
+        window_menu.addAction(self.open_playback_action)
 
     def open_video(self):
-        filepath, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.mov *.avi)")
+        filepath, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.MP4 *.mov *.MOV *.avi *.AVI *.mkv *.MKV *.webm *.WEBM)")
         if filepath:
             progress = QProgressDialog("Processing video to 15 FPS...", "Cancel", 0, 0, self)
             progress.setWindowTitle("Processing")
@@ -331,13 +412,15 @@ class RotoTool(QMainWindow):
             progress.show()
             QApplication.processEvents()
             
-            out_file = convert_to_15fps(filepath)
+            out_file, err = convert_to_15fps(filepath)
             progress.close()
             
             if out_file:
                 self.project = RotoProject()
                 self.project.video_path = out_file
                 self.load_video(out_file)
+            else:
+                QMessageBox.critical(self, "Video Load Failed", err or "Unknown error during video conversion.")
 
     def load_video(self, filepath):
         if self.cap:
@@ -412,6 +495,7 @@ class RotoTool(QMainWindow):
             img = QImage(frame.data, w, h, ch * w, QImage.Format.Format_RGB888)
             self.bg_item.setPixmap(QPixmap.fromImage(img))
             self.scene.setSceneRect(0, 0, w, h)
+            self._video_size = QSizeF(w, h)   # remember for playback window
             
             self.leave_edit_mode(save=False) # Safely drop unsaved drawing or editing when scrubbing frames
             self.redraw_polygons()
@@ -422,7 +506,7 @@ class RotoTool(QMainWindow):
         self.redraw_polygons()
             
     def _draw_onion_skins(self):
-        """Render ghost polygons from neighbouring frames below the live layer."""
+        """Render ghost polygons from neighbouring frames, aligned by registration point."""
         if not self.onion_mode:
             return
         frames_to_show = []
@@ -431,21 +515,73 @@ class RotoTool(QMainWindow):
         if self.onion_mode == "both" and self.current_game_frame < self.total_frames - 1:
             frames_to_show.append((self.current_game_frame + 1, QColor(80, 80, 255)))   # blue-tinted
 
+        cur_reg = self.project.get_registration(self.current_game_frame)
+        cur_rx, cur_ry = cur_reg[0], cur_reg[1]
+
         for frame_idx, tint in frames_to_show:
+            ghost_reg = self.project.get_registration(frame_idx)
+            # Compute shift so the ghost character's anchor aligns to the current anchor
+            dx = cur_rx - ghost_reg[0]
+            dy = cur_ry - ghost_reg[1]
+
             for poly_dict in self.project.get_polygons(frame_idx):
                 pts = poly_dict.get("points", [])
                 if len(pts) > 2:
-                    qpoly = QPolygonF([QPointF(x, y) for x, y in pts])
-                    ghost = self.scene.addPolygon(
+                    qpoly = QPolygonF([QPointF(x + dx, y + dy) for x, y in pts])
+                    self.scene.addPolygon(
                         qpoly,
                         QPen(tint, 1, Qt.PenStyle.DashLine),
                         QBrush(QColor(tint.red(), tint.green(), tint.blue(), 40))
                     )
 
+    def _place_registration_marker(self):
+        """Remove any existing reg marker and add a fresh one at the current frame's registration."""
+        # Remove old marker if present
+        if self.reg_marker is not None:
+            if self.reg_marker.scene():
+                self.scene.removeItem(self.reg_marker)
+            self.reg_marker = None
+
+        if not self.show_registration or not self.cap:
+            return
+
+        reg = self.project.get_registration(self.current_game_frame)
+        marker = RegistrationMarkerItem(on_moved=self._on_registration_moved)
+        marker.setPos(QPointF(reg[0], reg[1]))
+        self.scene.addItem(marker)
+        self.reg_marker = marker
+
+    def _on_registration_moved(self, x: float, y: float):
+        """Called when the user drags the registration marker."""
+        self.project.set_registration(self.current_game_frame, x, y)
+        # Update onion skins live so the alignment shifts in real time
+        if self.onion_mode:
+            self.redraw_polygons()
+
+    def _toggle_reg_visibility(self):
+        self.show_registration = self.show_reg_action.isChecked()
+        self._place_registration_marker()
+
+    def _open_playback_window(self):
+        if not self.cap:
+            QMessageBox.information(self, "No Video", "Please open a video project first.")
+            return
+        video_size = getattr(self, "_video_size", QSizeF(640, 480))
+        if self._playback_window is None or not self._playback_window.isVisible():
+            self._playback_window = PlaybackWindow(
+                self.project, self.total_frames, video_size, parent=self
+            )
+        else:
+            # Refresh in case the project changed
+            self._playback_window.update_project(self.project, self.total_frames, video_size)
+        self._playback_window.show()
+        self._playback_window.raise_()
+
     def redraw_polygons(self):
         for item in self.scene.items():
             if item != self.bg_item:
                 self.scene.removeItem(item)
+        self.reg_marker = None  # we just removed it; _place_registration_marker will recreate
 
         # Onion skins first (sit below live polys)
         self._draw_onion_skins()
@@ -470,6 +606,9 @@ class RotoTool(QMainWindow):
             if len(self.current_points) > 1:
                 qf = QPolygonF([QPointF(x, y) for x, y in self.current_points])
                 self.temp_polygon_item = self.scene.addPolygon(qf, pen, QBrush(Qt.BrushStyle.NoBrush))
+
+        # Registration marker always on top
+        self._place_registration_marker()
 
     def scene_mousePressEvent(self, event):
         if not self.cap or event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -562,6 +701,19 @@ class RotoTool(QMainWindow):
                     if item == self.active_edit_item:
                         item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
             self.set_status("EDIT MODE" if self.mode == "EDIT" else "DRAW MODE")
+            return
+
+        # Copy registration from previous frame (Shift+R)
+        if key == Qt.Key.Key_R and (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+            if self.cap:
+                copied = self.project.copy_registration_from_prev(self.current_game_frame)
+                if copied:
+                    reg = self.project.get_registration(self.current_game_frame)
+                    if self.reg_marker:
+                        self.reg_marker.setPos(QPointF(reg[0], reg[1]))
+                    self.set_status(f"Registration copied from frame {self.current_game_frame - 1}")
+                else:
+                    self.set_status("No previous registration point to copy")
             return
 
         # Onion skin toggle  (o = prev only, Shift+O = prev+next)
