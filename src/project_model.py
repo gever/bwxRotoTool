@@ -88,6 +88,17 @@ class RotoProject:
         """Returns [x, y] for a frame's registration point, defaulting to [0, 0]."""
         return self.registrations.get(frame_idx, [0.0, 0.0])
 
+    def get_nearest_registration(self, frame_idx):
+        """Returns the registration for frame_idx, or the nearest previous frame's
+        registration if this frame has none set. Falls back to [0, 0]."""
+        if frame_idx in self.registrations:
+            return self.registrations[frame_idx]
+        # Walk backwards to find the closest set registration
+        for i in range(frame_idx - 1, -1, -1):
+            if i in self.registrations:
+                return self.registrations[i]
+        return [0.0, 0.0]
+
     def copy_registration_from_prev(self, frame_idx):
         """Copies the registration point from frame_idx-1 to frame_idx.
         Returns True if a previous registration was found, False otherwise."""

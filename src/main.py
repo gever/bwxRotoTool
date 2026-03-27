@@ -20,8 +20,9 @@ class RegistrationMarkerItem(QGraphicsItem):
     """Draggable ⊕ crosshair that marks the per-frame registration point.
     Always rendered at a fixed screen size regardless of zoom level."""
 
-    RADIUS = 12   # screen-space radius in pixels
-    COLOR  = QColor(255, 220, 0)   # bright yellow
+    RADIUS = 12
+    # Store as plain tuple — QColor must NOT be created before QApplication exists
+    _COLOR_RGB = (255, 220, 0)   # bright yellow
 
     def __init__(self, on_moved=None):
         super().__init__()
@@ -42,8 +43,9 @@ class RegistrationMarkerItem(QGraphicsItem):
 
     def paint(self, painter, _option, _widget=None):
         r = self.RADIUS
+        color = QColor(*self._COLOR_RGB)
         pen_outer = QPen(QColor(0, 0, 0, 160), 3)
-        pen_inner = QPen(self.COLOR, 2)
+        pen_inner = QPen(color, 2)
 
         # Shadow ring
         painter.setPen(pen_outer)
@@ -59,7 +61,7 @@ class RegistrationMarkerItem(QGraphicsItem):
         painter.drawLine(QPointF(0, -r - 4), QPointF(0, r + 4))
 
         # Centre dot
-        painter.setBrush(QBrush(self.COLOR))
+        painter.setBrush(QBrush(color))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(0, 0), 3, 3)
 
@@ -68,6 +70,7 @@ class RegistrationMarkerItem(QGraphicsItem):
             if self._on_moved:
                 self._on_moved(value.x(), value.y())
         return super().itemChange(change, value)
+
 
 
 # ── Vertex / polygon items ────────────────────────────────────────────────────
@@ -496,9 +499,17 @@ class RotoTool(QMainWindow):
             self.bg_item.setPixmap(QPixmap.fromImage(img))
             self.scene.setSceneRect(0, 0, w, h)
             self._video_size = QSizeF(w, h)   # remember for playback window
-            
+
+            # Auto-seed registration from the nearest previous frame so the
+            # crosshair doesn't jump back to (0,0) when advancing to an unset frame.
+            if self.current_game_frame not in self.project.registrations:
+                inherited = self.project.get_nearest_registration(self.current_game_frame)
+                if inherited != [0.0, 0.0]:
+                    self.project.set_registration(self.current_game_frame, inherited[0], inherited[1])
+
             self.leave_edit_mode(save=False) # Safely drop unsaved drawing or editing when scrubbing frames
             self.redraw_polygons()
+
             
     def clear_current_frame(self):
         self.project.clear_frame(self.current_game_frame)
