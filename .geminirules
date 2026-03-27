@@ -5,6 +5,6 @@ Only operate on files in the current directory and subdirectories.
 
 Do not modify or delete any files unless explicitly asked to do so.
 
-Avoid sycophantic language, and always respond in a professional and concise manner.
+Avoid sycophantic or enthusiastic language. Do not use exclamation marks or overly excited phrasing. Always respond in a professional, direct, and concise manner.
 
 New requests for changes to the project should be added to TODO.md; propose a short summary of the changes and ask the user to review and approve before making any changes to TODO.md

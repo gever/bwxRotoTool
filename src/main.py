@@ -200,12 +200,43 @@ class RotoTool(QMainWindow):
         self.current_points = []
         self.temp_polygon_item = None
         self.temp_dots = []
+        self.current_polygon_color = QColor(0, 255, 0)
 
         self._create_actions()
         self._create_menu()
         
         if initial_video and os.path.exists(initial_video):
             self.load_video(initial_video)
+        else:
+            # We delay the message box slightly so the main window can render first, checking last project
+            import threading
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, self.check_last_project)
+
+    def check_last_project(self):
+        settings_path = os.path.expanduser("~/.bwxrototool")
+        if os.path.exists(settings_path):
+            try:
+                import json
+                with open(settings_path, "r") as f:
+                    data = json.load(f)
+                last_proj = data.get("last_project")
+                if last_proj and os.path.exists(last_proj):
+                    reply = QMessageBox.question(self, "Resume Last Project", f"Would you like to resume your last project?\n\n{last_proj}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                    if reply == QMessageBox.StandardButton.Yes:
+                        self.load_project_file(last_proj)
+            except Exception:
+                pass
+
+    def save_settings(self):
+        settings_path = os.path.expanduser("~/.bwxrototool")
+        if self.current_project_file:
+            try:
+                import json
+                with open(settings_path, "w") as f:
+                    json.dump({"last_project": self.current_project_file}, f)
+            except Exception:
+                pass
 
     def _create_actions(self):
         self.open_video_action = QAction("Open Video...", self)
@@ -295,20 +326,25 @@ class RotoTool(QMainWindow):
     def open_project(self):
         filepath, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Roto Files (*.bwxroto *.json)")
         if filepath:
-            self.project = RotoProject()
-            try:
-                self.project.load(filepath)
-                self.current_project_file = filepath
-                
-                if self.project.video_path and os.path.exists(self.project.video_path):
-                    self.load_video(self.project.video_path)
-            except Exception as e:
-                pass
+            self.load_project_file(filepath)
+
+    def load_project_file(self, filepath):
+        self.project = RotoProject()
+        try:
+            self.project.load(filepath)
+            self.current_project_file = filepath
+            
+            if self.project.video_path and os.path.exists(self.project.video_path):
+                self.load_video(self.project.video_path)
+            self.save_settings()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load project: {e}")
 
     def save_project(self):
         if self.current_project_file:
             self.project.save(self.current_project_file)
             self.set_status("Saved")
+            self.save_settings()
         else:
             self.save_project_as()
             
@@ -320,6 +356,7 @@ class RotoTool(QMainWindow):
             self.project.save(filepath)
             self.current_project_file = filepath
             self.set_status("Saved")
+            self.save_settings()
 
     def export_bwxbasic(self):
         filepath, _ = QFileDialog.getSaveFileName(self, "Export bwxBASIC", "", "Text Files (*.bas *.txt)")
@@ -365,14 +402,14 @@ class RotoTool(QMainWindow):
         self.temp_polygon_item = None
         self.temp_dots = []
         if self.current_points:
-            pen_blue = QPen(QColor(0, 0, 255), 2)
-            brush_blue = QBrush(QColor(0, 0, 255))
+            pen = QPen(self.current_polygon_color, 2)
+            brush = QBrush(self.current_polygon_color)
             for x, y in self.current_points:
-                dot = self.scene.addEllipse(x-3, y-3, 6, 6, pen_blue, brush_blue)
+                dot = self.scene.addEllipse(x-3, y-3, 6, 6, pen, brush)
                 self.temp_dots.append(dot)
             if len(self.current_points) > 1:
                 qf = QPolygonF([QPointF(x, y) for x, y in self.current_points])
-                self.temp_polygon_item = self.scene.addPolygon(qf, pen_blue, QBrush(Qt.BrushStyle.NoBrush))
+                self.temp_polygon_item = self.scene.addPolygon(qf, pen, QBrush(Qt.BrushStyle.NoBrush))
 
     def scene_mousePressEvent(self, event):
         if not self.cap or event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -443,6 +480,7 @@ class RotoTool(QMainWindow):
                 color = QColorDialog.getColor(self.active_edit_item.color, self, "Select Polygon Color")
                 if color.isValid():
                     self.active_edit_item.color = color
+                    self.current_polygon_color = color
                     self.active_edit_item.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 100)))
                     self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
             return
@@ -458,7 +496,7 @@ class RotoTool(QMainWindow):
                 self.update_frame()
             elif key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
                 if len(self.current_points) > 2:
-                    poly_dict = {"points": self.current_points, "color": "#00ff00", "z_index": 0}
+                    poly_dict = {"points": self.current_points, "color": self.current_polygon_color.name(), "z_index": 0}
                     self.project.add_polygon(self.current_game_frame, poly_dict)
                 self.current_points = []
                 self.redraw_polygons()
