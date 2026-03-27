@@ -350,12 +350,18 @@ class RotoTool(QMainWindow):
             
             if self.project.video_path and os.path.exists(self.project.video_path):
                 self.load_video(self.project.video_path)
+                # Restore the saved frame position
+                saved_frame = max(0, min(self.project.last_frame, self.total_frames - 1))
+                if saved_frame != 0:
+                    self.current_game_frame = saved_frame
+                    self.update_frame()
             self.save_settings()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load project: {e}")
 
     def save_project(self):
         if self.current_project_file:
+            self.project.last_frame = self.current_game_frame
             self.project.save(self.current_project_file)
             self.set_status("Saved")
             self.save_settings()
@@ -367,6 +373,7 @@ class RotoTool(QMainWindow):
         if filepath:
             if not filepath.endswith('.bwxroto'):
                 filepath += '.bwxroto'
+            self.project.last_frame = self.current_game_frame
             self.project.save(filepath)
             self.current_project_file = filepath
             self.set_status("Saved")

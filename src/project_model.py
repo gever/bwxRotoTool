@@ -4,6 +4,7 @@ import os
 class RotoProject:
     def __init__(self):
         self.video_path = None
+        self.last_frame = 0
         # frames is a dict mapping frame_idx (int) to a list of polygons.
         # A polygon is a dict: {"points": [[x1, y1], [x2, y2], ...], "color": "#00ff00", "z_index": 0}
         self.frames = {}
@@ -11,11 +12,13 @@ class RotoProject:
     def to_dict(self):
         return {
             "video_path": self.video_path,
+            "last_frame": self.last_frame,
             "frames": self.frames
         }
 
     def from_dict(self, data):
         self.video_path = data.get("video_path", None)
+        self.last_frame = data.get("last_frame", 0)
         raw_frames = data.get("frames", {})
         self.frames = {}
         for k, v in raw_frames.items():
