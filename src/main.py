@@ -441,7 +441,6 @@ class RotoTool(QMainWindow):
                         QPen(tint, 1, Qt.PenStyle.DashLine),
                         QBrush(QColor(tint.red(), tint.green(), tint.blue(), 40))
                     )
-                    ghost.setZValue(-1)   # below live polygons, above background
 
     def redraw_polygons(self):
         for item in self.scene.items():
