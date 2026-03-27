@@ -31,7 +31,7 @@ class VertexHandleItem(QGraphicsEllipseItem):
         return super().itemChange(change, value)
 
 class RotoPolygonItem(QGraphicsPolygonItem):
-    def __init__(self, poly_dict, parent=None):
+    def __init__(self, poly_dict, parent=None, fill_alpha=100):
         super().__init__(parent)
         self.poly_dict = poly_dict.copy()
         
@@ -41,7 +41,7 @@ class RotoPolygonItem(QGraphicsPolygonItem):
         self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.color = QColor(self.poly_dict.get("color", "#00ff00"))
         
-        self.setBrush(QBrush(QColor(self.color.red(), self.color.green(), self.color.blue(), 100)))
+        self.setBrush(QBrush(QColor(self.color.red(), self.color.green(), self.color.blue(), fill_alpha)))
         self.setPen(QPen(self.color, 2))
         
         self.z_val = self.poly_dict.get("z_index", 0)
@@ -203,6 +203,7 @@ class RotoTool(QMainWindow):
         self.temp_polygon_item = None
         self.temp_dots = []
         self.current_polygon_color = QColor(0, 255, 0)
+        self.opaque_fill = False   # Space toggles transparent ↔ opaque fill
 
         # Color history (up to 16, most recent first)
         self.color_history: list[QColor] = []
@@ -406,9 +407,10 @@ class RotoTool(QMainWindow):
                 
         # Draw committed polygons via our new smart objects
         polys_dict_list = self.project.get_polygons(self.current_game_frame)
+        fill_alpha = 255 if self.opaque_fill else 100
         for poly_dict in polys_dict_list:
             if len(poly_dict.get("points", [])) > 2:
-                poly_item = RotoPolygonItem(poly_dict)
+                poly_item = RotoPolygonItem(poly_dict, fill_alpha=fill_alpha)
                 self.scene.addItem(poly_item)
             
         # Draw current points (in-progress drawing mode)
@@ -481,7 +483,13 @@ class RotoTool(QMainWindow):
             self.redraw_polygons()
 
     def set_status(self, msg):
-        self.status_label.setText(f"Frame: {self.current_game_frame} / {self.total_frames} | {msg}")
+        fill_tag = "OPAQUE" if self.opaque_fill else "TRANSPARENT"
+        self.status_label.setText(f"Frame: {self.current_game_frame} / {self.total_frames} | {msg} | Fill: {fill_tag}")
+
+    def _fill_brush(self, color: QColor) -> QBrush:
+        """Return a fill brush using the current opaque/transparent setting."""
+        alpha = 255 if self.opaque_fill else 100
+        return QBrush(QColor(color.red(), color.green(), color.blue(), alpha))
 
     def _pick_color(self, initial: QColor) -> QColor | None:
         """Open the custom color picker and return the chosen color (or None).
@@ -500,6 +508,19 @@ class RotoTool(QMainWindow):
         if not self.cap: return
         key = event.key()
         
+        # Opaque / transparent fill toggle (Space)
+        if key == Qt.Key.Key_Space:
+            self.opaque_fill = not self.opaque_fill
+            # Immediately refresh all visible polygon brushes
+            for item in self.scene.items():
+                if isinstance(item, RotoPolygonItem):
+                    item.setBrush(self._fill_brush(item.color))
+                    if item == self.active_edit_item:
+                        # Keep the dashed-white edit pen
+                        item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
+            self.set_status("EDIT MODE" if self.mode == "EDIT" else "DRAW MODE")
+            return
+
         # Color Dialog (Ctrl+P)
         if key == Qt.Key.Key_P and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
             if self.mode == "EDIT" and self.active_edit_item:
@@ -507,7 +528,7 @@ class RotoTool(QMainWindow):
                 if color:
                     self.active_edit_item.color = color
                     self.current_polygon_color = color
-                    self.active_edit_item.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 100)))
+                    self.active_edit_item.setBrush(self._fill_brush(color))
                     self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
             else:
                 # No polygon selected — pick the default draw color for new polygons
