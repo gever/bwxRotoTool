@@ -156,17 +156,22 @@ class PlaybackWindow(QDialog):
     def _tick(self):
         if not self._playing:
             return
+        project = self._project
+        start = project.start_frame if project else 0
+        end = project.end_frame if (project and project.end_frame is not None) else (self._total_frames - 1)
+        end = min(end, self._total_frames - 1)
+
         next_frame = self._canvas.current_frame + 1
-        if next_frame >= self._total_frames:
+        if next_frame > end:
             if self._looping:
-                next_frame = 0
+                next_frame = start
             else:
-                next_frame = self._total_frames - 1
+                next_frame = end
                 self._playing = False
                 self._play_btn.setText("▶ Play")
         self._canvas.current_frame = next_frame
         self._canvas.update()
-        self._frame_label.setText(f"Frame {next_frame}")
+        self._frame_label.setText(f"Frame {next_frame}  [{start}–{end}]")
 
     def _toggle_play(self):
         self._playing = not self._playing

@@ -11,6 +11,9 @@ class RotoProject:
         # registrations is a dict mapping frame_idx (int) to [x, y] in video pixels.
         # This is the per-frame reference point all exported coordinates are relative to.
         self.registrations = {}
+        # In/out work-range. None means "use total_frames - 1" for end_frame.
+        self.start_frame: int = 0
+        self.end_frame: int | None = None
 
     def to_dict(self):
         return {
@@ -18,11 +21,15 @@ class RotoProject:
             "last_frame": self.last_frame,
             "frames": self.frames,
             "registrations": self.registrations,
+            "start_frame": self.start_frame,
+            "end_frame": self.end_frame,
         }
 
     def from_dict(self, data):
         self.video_path = data.get("video_path", None)
         self.last_frame = data.get("last_frame", 0)
+        self.start_frame = data.get("start_frame", 0)
+        self.end_frame = data.get("end_frame", None)
         raw_frames = data.get("frames", {})
         self.frames = {}
         for k, v in raw_frames.items():

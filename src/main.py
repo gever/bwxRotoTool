@@ -291,6 +291,9 @@ class RotoTool(QMainWindow):
         # Playback window (keeps a reference so it isn't garbage-collected)
         self._playback_window: PlaybackWindow | None = None
 
+        # Unsaved-changes flag
+        self._dirty = False
+
         self._create_actions()
         self._create_menu()
         
@@ -447,6 +450,7 @@ class RotoTool(QMainWindow):
         try:
             self.project.load(filepath)
             self.current_project_file = filepath
+            self._dirty = False   # freshly loaded project has no unsaved changes
             
             if self.project.video_path and os.path.exists(self.project.video_path):
                 self.load_video(self.project.video_path)
@@ -463,6 +467,7 @@ class RotoTool(QMainWindow):
         if self.current_project_file:
             self.project.last_frame = self.current_game_frame
             self.project.save(self.current_project_file)
+            self._dirty = False
             self.set_status("Saved")
             self.save_settings()
         else:
@@ -476,6 +481,7 @@ class RotoTool(QMainWindow):
             self.project.last_frame = self.current_game_frame
             self.project.save(filepath)
             self.current_project_file = filepath
+            self._dirty = False
             self.set_status("Saved")
             self.save_settings()
 
@@ -513,6 +519,7 @@ class RotoTool(QMainWindow):
             
     def clear_current_frame(self):
         self.project.clear_frame(self.current_game_frame)
+        self._dirty = True
         self.current_points = []
         self.redraw_polygons()
             
@@ -565,6 +572,7 @@ class RotoTool(QMainWindow):
     def _on_registration_moved(self, x: float, y: float):
         """Called when the user drags the registration marker."""
         self.project.set_registration(self.current_game_frame, x, y)
+        self._dirty = True
         # Update onion skins live so the alignment shifts in real time
         if self.onion_mode:
             self.redraw_polygons()
@@ -587,6 +595,27 @@ class RotoTool(QMainWindow):
             self._playback_window.update_project(self.project, self.total_frames, video_size)
         self._playback_window.show()
         self._playback_window.raise_()
+
+    def closeEvent(self, event):
+        if self._dirty:
+            name = os.path.basename(self.current_project_file) if self.current_project_file else "Untitled"
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                f"'{name}' has unsaved changes.\n\nSave before closing?",
+                QMessageBox.StandardButton.Save |
+                QMessageBox.StandardButton.Discard |
+                QMessageBox.StandardButton.Cancel
+            )
+            if reply == QMessageBox.StandardButton.Save:
+                self.save_project()
+                # If still dirty after save attempt (e.g. Save As was cancelled), abort close
+                if self._dirty:
+                    event.ignore()
+                    return
+            elif reply == QMessageBox.StandardButton.Cancel:
+                event.ignore()
+                return
+        event.accept()
 
     def redraw_polygons(self):
         for item in self.scene.items():
@@ -667,6 +696,7 @@ class RotoTool(QMainWindow):
                 for item in items:
                     new_polys.append(item.get_dict())
                 self.project.set_polygons(self.current_game_frame, new_polys)
+                self._dirty = True
 
         self.mode = "DRAW"
         self.active_edit_item = None
@@ -679,7 +709,11 @@ class RotoTool(QMainWindow):
 
     def set_status(self, msg):
         fill_tag = "OPAQUE" if self.opaque_fill else "TRANSPARENT"
-        self.status_label.setText(f"Frame: {self.current_game_frame} / {self.total_frames} | {msg} | Fill: {fill_tag}")
+        end_tag = self.project.end_frame if self.project.end_frame is not None else (self.total_frames - 1)
+        range_tag = f"In:{self.project.start_frame}  Out:{end_tag}"
+        self.status_label.setText(
+            f"Frame: {self.current_game_frame} / {self.total_frames - 1}  [{range_tag}] | {msg} | Fill: {fill_tag}"
+        )
 
     def _fill_brush(self, color: QColor) -> QBrush:
         """Return a fill brush using the current opaque/transparent setting."""
@@ -712,6 +746,25 @@ class RotoTool(QMainWindow):
                     if item == self.active_edit_item:
                         item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
             self.set_status("EDIT MODE" if self.mode == "EDIT" else "DRAW MODE")
+            return
+
+        # Set In-point  (I)
+        if key == Qt.Key.Key_I and not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            self.project.start_frame = self.current_game_frame
+            # Clamp end_frame if it became less than start
+            end = self.project.end_frame if self.project.end_frame is not None else self.total_frames - 1
+            if end < self.project.start_frame:
+                self.project.end_frame = self.project.start_frame
+            self.set_status(f"In-point set: frame {self.project.start_frame}")
+            return
+
+        # Set End/Out-point  (E)
+        if key == Qt.Key.Key_E and not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            self.project.end_frame = self.current_game_frame
+            # Clamp start_frame if it became greater than end
+            if self.project.start_frame > self.project.end_frame:
+                self.project.start_frame = self.project.end_frame
+            self.set_status(f"End-point set: frame {self.project.end_frame}")
             return
 
         # Copy registration from previous frame (Shift+R)
@@ -754,6 +807,7 @@ class RotoTool(QMainWindow):
                 import copy
                 new_dict = copy.deepcopy(self.copy_buffer)
                 self.project.add_polygon(self.current_game_frame, new_dict)
+                self._dirty = True
                 self.redraw_polygons()
                 self.set_status(f"Pasted polygon to frame {self.current_game_frame}")
             return
@@ -787,6 +841,7 @@ class RotoTool(QMainWindow):
                 if len(self.current_points) > 2:
                     poly_dict = {"points": self.current_points, "color": self.current_polygon_color.name(), "z_index": 0}
                     self.project.add_polygon(self.current_game_frame, poly_dict)
+                    self._dirty = True
                 self.current_points = []
                 self.redraw_polygons()
             elif key == Qt.Key.Key_Escape:
@@ -809,8 +864,10 @@ class RotoTool(QMainWindow):
                             item.parent_poly.show_handles()
                         else:
                             self.scene.removeItem(item.parent_poly)
+                        self._dirty = True
                     elif isinstance(item, RotoPolygonItem):
                         self.scene.removeItem(item)
+                        self._dirty = True
                         self.leave_edit_mode(save=True)
             elif key == Qt.Key.Key_BracketRight:
                 if self.active_edit_item:
