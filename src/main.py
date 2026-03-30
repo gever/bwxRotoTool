@@ -384,6 +384,14 @@ class RotoTool(QMainWindow):
         self.open_playback_action.setShortcut("Ctrl+Shift+P")
         self.open_playback_action.triggered.connect(self._open_playback_window)
 
+        # Tools
+        self.estimate_registration_action = QAction("Estimate Registration", self)
+        self.estimate_registration_action.setShortcut("Ctrl+Shift+E")
+        self.estimate_registration_action.setToolTip(
+            "Set the registration point to the centroid of the currently drawn vertices"
+        )
+        self.estimate_registration_action.triggered.connect(self.estimate_registration)
+
     def _create_menu(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
@@ -405,6 +413,9 @@ class RotoTool(QMainWindow):
         view_menu.addAction(self.zoom_fit_action)
         view_menu.addSeparator()
         view_menu.addAction(self.show_reg_action)
+
+        tools_menu = menubar.addMenu("Tools")
+        tools_menu.addAction(self.estimate_registration_action)
 
         window_menu = menubar.addMenu("Window")
         window_menu.addAction(self.open_playback_action)
@@ -580,6 +591,40 @@ class RotoTool(QMainWindow):
     def _toggle_reg_visibility(self):
         self.show_registration = self.show_reg_action.isChecked()
         self._place_registration_marker()
+
+    def estimate_registration(self):
+        """Set the current frame's registration point to the centroid of all
+        visible vertices on the current frame: committed polygons + any
+        in-progress drawn points.  Does nothing if there are no vertices."""
+        all_points: list[list[float]] = []
+
+        # 1. Vertices from committed polygons on this frame
+        for poly_dict in self.project.get_polygons(self.current_game_frame):
+            all_points.extend(poly_dict.get("points", []))
+
+        # 2. In-progress (not yet committed) drawn vertices
+        all_points.extend(self.current_points)
+
+        if not all_points:
+            self.set_status("Estimate Registration: no vertices on this frame — registration unchanged")
+            return
+
+        avg_x = sum(p[0] for p in all_points) / len(all_points)
+        avg_y = sum(p[1] for p in all_points) / len(all_points)
+
+        self.project.set_registration(self.current_game_frame, avg_x, avg_y)
+        self._dirty = True
+
+        # Move the on-screen marker to match
+        if self.reg_marker is not None:
+            self.reg_marker.setPos(QPointF(avg_x, avg_y))
+        else:
+            self._place_registration_marker()
+
+        self.set_status(
+            f"Registration estimated at ({avg_x:.1f}, {avg_y:.1f}) "
+            f"from {len(all_points)} vertices"
+        )
 
     def _open_playback_window(self):
         if not self.cap:
