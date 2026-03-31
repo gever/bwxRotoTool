@@ -393,6 +393,16 @@ class RotoTool(QMainWindow):
         )
         self.estimate_registration_action.triggered.connect(self.estimate_registration)
 
+        self.set_in_point_action = QAction("Set In-point", self)
+        self.set_in_point_action.setShortcut("I")
+        self.set_in_point_action.setToolTip("Set the In-point to the current frame")
+        self.set_in_point_action.triggered.connect(self._set_in_point)
+
+        self.set_out_point_action = QAction("Set Out-point", self)
+        self.set_out_point_action.setShortcut("E")
+        self.set_out_point_action.setToolTip("Set the Out-point to the current frame")
+        self.set_out_point_action.triggered.connect(self._set_out_point)
+
     def _create_menu(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
@@ -417,6 +427,9 @@ class RotoTool(QMainWindow):
 
         tools_menu = menubar.addMenu("Tools")
         tools_menu.addAction(self.estimate_registration_action)
+        tools_menu.addSeparator()
+        tools_menu.addAction(self.set_in_point_action)
+        tools_menu.addAction(self.set_out_point_action)
 
         window_menu = menubar.addMenu("Window")
         window_menu.addAction(self.open_playback_action)
@@ -643,6 +656,25 @@ class RotoTool(QMainWindow):
             f"from {len(all_points)} vertices"
         )
 
+    def _set_in_point(self):
+        """Set the In-point to the current frame."""
+        if not self.cap:
+            return
+        self.project.start_frame = self.current_game_frame
+        end = self.project.end_frame if self.project.end_frame is not None else self.total_frames - 1
+        if end < self.project.start_frame:
+            self.project.end_frame = self.project.start_frame
+        self.set_status(f"In-point set: frame {self.project.start_frame}")
+
+    def _set_out_point(self):
+        """Set the Out-point to the current frame."""
+        if not self.cap:
+            return
+        self.project.end_frame = self.current_game_frame
+        if self.project.start_frame > self.project.end_frame:
+            self.project.start_frame = self.project.end_frame
+        self.set_status(f"Out-point set: frame {self.project.end_frame}")
+
     def _open_playback_window(self):
         if not self.cap:
             QMessageBox.information(self, "No Video", "Please open a video project first.")
@@ -812,21 +844,12 @@ class RotoTool(QMainWindow):
 
         # Set In-point  (I)
         if key == Qt.Key.Key_I and not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-            self.project.start_frame = self.current_game_frame
-            # Clamp end_frame if it became less than start
-            end = self.project.end_frame if self.project.end_frame is not None else self.total_frames - 1
-            if end < self.project.start_frame:
-                self.project.end_frame = self.project.start_frame
-            self.set_status(f"In-point set: frame {self.project.start_frame}")
+            self._set_in_point()
             return
 
         # Set End/Out-point  (E)
         if key == Qt.Key.Key_E and not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-            self.project.end_frame = self.current_game_frame
-            # Clamp start_frame if it became greater than end
-            if self.project.start_frame > self.project.end_frame:
-                self.project.start_frame = self.project.end_frame
-            self.set_status(f"End-point set: frame {self.project.end_frame}")
+            self._set_out_point()
             return
 
         # Copy registration from previous frame (Shift+R)
