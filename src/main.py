@@ -287,6 +287,7 @@ class RotoTool(QMainWindow):
         # Registration marker state
         self.reg_marker: RegistrationMarkerItem | None = None
         self.show_registration = True   # toggled via View menu
+        self._placing_reg_marker = False   # guard against setPos → itemChange → redraw loop
 
         # Playback window (keeps a reference so it isn't garbage-collected)
         self._playback_window: PlaybackWindow | None = None
@@ -576,17 +577,33 @@ class RotoTool(QMainWindow):
 
         reg = self.project.get_registration(self.current_game_frame)
         marker = RegistrationMarkerItem(on_moved=self._on_registration_moved)
-        marker.setPos(QPointF(reg[0], reg[1]))
+        # Guard: setPos fires itemChange → _on_registration_moved; we must not
+        # treat this programmatic move as a user drag (would cause infinite recursion
+        # when onion-skinning is active).
+        self._placing_reg_marker = True
+        try:
+            marker.setPos(QPointF(reg[0], reg[1]))
+        finally:
+            self._placing_reg_marker = False
         self.scene.addItem(marker)
         self.reg_marker = marker
 
     def _on_registration_moved(self, x: float, y: float):
         """Called when the user drags the registration marker."""
+        # Ignore position changes that originate from our own setPos call inside
+        # _place_registration_marker — those are not user drags.
+        if self._placing_reg_marker:
+            return
         self.project.set_registration(self.current_game_frame, x, y)
         self._dirty = True
-        # Update onion skins live so the alignment shifts in real time
+        # Update onion skins live so the alignment shifts in real time.
+        # IMPORTANT: defer via singleShot so we do NOT call redraw_polygons()
+        # synchronously while a drag is in progress — redraw removes all scene
+        # items including the marker currently being dragged, which causes Qt to
+        # segfault when it tries to continue the drag on the deleted item.
         if self.onion_mode:
-            self.redraw_polygons()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, self.redraw_polygons)
 
     def _toggle_reg_visibility(self):
         self.show_registration = self.show_reg_action.isChecked()

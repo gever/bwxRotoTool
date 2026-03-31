@@ -47,8 +47,12 @@ class _Canvas(QFrame):
         oy = (h - draw_h) / 2
 
         # ── Registration-relative polygon drawing ───────────────────────────
+        # The registration point is mapped to the exact centre of the canvas.
         reg = self.project.get_registration(self.current_frame)
         reg_x, reg_y = reg[0], reg[1]
+
+        cx_centre = w / 2   # canvas centre
+        cy_centre = h / 2
 
         polys = self.project.get_polygons(self.current_frame)
         sorted_polys = sorted(polys, key=lambda p: p.get("z_index", 0))
@@ -59,11 +63,13 @@ class _Canvas(QFrame):
                 continue
             color = QColor(poly_dict.get("color", "#00ff00"))
 
-            # Normalize to registration-relative, then scale to canvas
+            # Each vertex is offset from the registration point and scaled,
+            # then placed relative to the canvas centre so the registration
+            # anchor always sits in the middle of the playback window.
             qpts = QPolygonF()
             for px, py in raw_pts:
-                cx = ox + (px - reg_x) * scale
-                cy = oy + (py - reg_y) * scale
+                cx = cx_centre + (px - reg_x) * scale
+                cy = cy_centre + (py - reg_y) * scale
                 qpts.append(QPointF(cx, cy))
 
             painter.setPen(QPen(color, max(1, scale)))
