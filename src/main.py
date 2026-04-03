@@ -15,6 +15,246 @@ from video_processor import convert_to_15fps
 from project_model import RotoProject
 from playback import PlaybackWindow
 
+# ── Timeline bar ─────────────────────────────────────────────────────────────
+
+class TimelineBar(QWidget):
+    """
+    A compact scrub bar showing:
+      • A dark track spanning frame 0..N-1
+      • A highlighted in→out region
+      • Draggable in-point  (yellow left triangle)
+      • Draggable out-point (yellow right triangle)
+      • A playhead needle   (white vertical line + top dot)
+      • Subtle tick marks for frames that have polygon data
+
+    Signals
+    -------
+    frame_changed(int)   – user clicked/dragged the track → jump to frame
+    in_changed(int)      – user dragged the in-point handle
+    out_changed(int)     – user dragged the out-point handle
+    """
+
+    frame_changed = pyqtSignal(int)
+    in_changed    = pyqtSignal(int)
+    out_changed   = pyqtSignal(int)
+
+    _HEIGHT      = 32
+    _TRACK_H     = 10          # height of the coloured track band
+    _HANDLE_W    = 10          # half-width of the triangle handle base
+    _HIT_RADIUS  = 10          # px either side for handle hit-testing
+
+    # colours
+    _C_BG        = QColor(0x0e, 0x0f, 0x1e)
+    _C_TRACK     = QColor(0x25, 0x26, 0x40)
+    _C_RANGE     = QColor(0x2e, 0x50, 0x8a, 180)
+    _C_TICK      = QColor(0x6c, 0x8f, 0xf0, 140)
+    _C_IN        = QColor(0xf5, 0xc5, 0x18)   # yellow
+    _C_OUT       = QColor(0xf5, 0xc5, 0x18)
+    _C_PLAYHEAD  = QColor(0xff, 0xff, 0xff)
+    _C_LABEL     = QColor(0x9a, 0xa5, 0xc4)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(self._HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+
+        self._total   = 0     # total_frames (0 = no video loaded)
+        self._current = 0     # current playhead frame
+        self._in      = 0     # in-point frame
+        self._out     = 0     # out-point frame  (≡ total-1 when unset)
+        self._has_data: set[int] = set()   # frames with polygon data for ticks
+
+        self._drag: str | None = None   # "in" | "out" | "playhead" | "track"
+
+    # ── public setters (called by RotoTool whenever state changes) ─────────
+
+    def set_total(self, total: int):
+        self._total = max(1, total)
+        self.update()
+
+    def set_current(self, frame: int):
+        self._current = frame
+        self.update()
+
+    def set_in_out(self, in_f: int, out_f: int):
+        self._in  = in_f
+        self._out = out_f
+        self.update()
+
+    def set_data_frames(self, frames: set[int]):
+        self._has_data = set(frames)
+        self.update()
+
+    # ── geometry helpers ────────────────────────────────────────────────────
+
+    def _margin(self):
+        return self._HANDLE_W + 4
+
+    def _track_rect(self):
+        m  = self._margin()
+        cy = self._HEIGHT // 2
+        return QRectF(m, cy - self._TRACK_H // 2,
+                      self.width() - 2 * m, self._TRACK_H)
+
+    def _frame_to_x(self, frame: int) -> float:
+        tr = self._track_rect()
+        if self._total <= 1:
+            return tr.left()
+        return tr.left() + (frame / (self._total - 1)) * tr.width()
+
+    def _x_to_frame(self, x: float) -> int:
+        tr = self._track_rect()
+        if tr.width() <= 0:
+            return 0
+        t = (x - tr.left()) / tr.width()
+        return int(round(max(0.0, min(1.0, t)) * (self._total - 1)))
+
+    # ── hit testing ────────────────────────────────────────────────────────
+
+    def _hit(self, x: float) -> str | None:
+        if self._total <= 0:
+            return None
+        ix = self._frame_to_x(self._in)
+        ox = self._frame_to_x(self._out)
+        px = self._frame_to_x(self._current)
+        if abs(x - px) <= self._HIT_RADIUS:
+            return "playhead"
+        if abs(x - ix) <= self._HIT_RADIUS:
+            return "in"
+        if abs(x - ox) <= self._HIT_RADIUS:
+            return "out"
+        tr = self._track_rect()
+        if tr.left() - self._HANDLE_W <= x <= tr.right() + self._HANDLE_W:
+            return "track"
+        return None
+
+    # ── painting ────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _event):
+        if self._total <= 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), self._C_BG)
+
+        tr  = self._track_rect()
+        m   = self._margin()
+        cy  = self._HEIGHT // 2
+
+        # ── track background ──
+        path = QPainterPath()
+        path.addRoundedRect(tr, 3, 3)
+        p.fillPath(path, self._C_TRACK)
+
+        # ── in→out highlight ──
+        ix = self._frame_to_x(self._in)
+        ox = self._frame_to_x(self._out)
+        rng = QRectF(ix, tr.top(), ox - ix, tr.height())
+        if rng.width() > 0:
+            rng_path = QPainterPath()
+            rng_path.addRoundedRect(rng, 2, 2)
+            p.fillPath(rng_path, self._C_RANGE)
+
+        # ── per-frame data ticks ──
+        p.setPen(QPen(self._C_TICK, 1))
+        tick_top    = tr.top() + 1
+        tick_bottom = tr.bottom() - 1
+        for f in self._has_data:
+            fx = self._frame_to_x(f)
+            p.drawLine(QPointF(fx, tick_top), QPointF(fx, tick_bottom))
+
+        # ── track border ──
+        p.setPen(QPen(QColor(255, 255, 255, 25), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+
+        # ── in-point handle (left-pointing filled triangle) ──
+        self._draw_in_handle(p, ix, cy)
+
+        # ── out-point handle (right-pointing filled triangle) ──
+        self._draw_out_handle(p, ox, cy)
+
+        # ── playhead needle ──
+        px = self._frame_to_x(self._current)
+        p.setPen(QPen(self._C_PLAYHEAD, 1.5))
+        p.drawLine(QPointF(px, tr.top() - 2), QPointF(px, tr.bottom() + 2))
+        # top dot
+        p.setBrush(QBrush(self._C_PLAYHEAD))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(px, tr.top() - 5), 4, 4)
+
+    def _draw_in_handle(self, p: QPainter, x: float, cy: int):
+        hw = self._HANDLE_W
+        hh = self._TRACK_H + 4
+        # Right-facing triangle (points right into the track)
+        tri = QPolygonF([
+            QPointF(x - hw, cy - hh // 2),
+            QPointF(x,      cy),
+            QPointF(x - hw, cy + hh // 2),
+        ])
+        p.setBrush(QBrush(self._C_IN))
+        p.setPen(QPen(QColor(0, 0, 0, 80), 1))
+        p.drawPolygon(tri)
+
+    def _draw_out_handle(self, p: QPainter, x: float, cy: int):
+        hw = self._HANDLE_W
+        hh = self._TRACK_H + 4
+        # Left-facing triangle (points left into the track)
+        tri = QPolygonF([
+            QPointF(x + hw, cy - hh // 2),
+            QPointF(x,      cy),
+            QPointF(x + hw, cy + hh // 2),
+        ])
+        p.setBrush(QBrush(self._C_OUT))
+        p.setPen(QPen(QColor(0, 0, 0, 80), 1))
+        p.drawPolygon(tri)
+
+    # ── mouse interaction ───────────────────────────────────────────────────
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton or self._total <= 0:
+            return
+        x = event.position().x()
+        self._drag = self._hit(x)
+        if self._drag in ("in", "playhead"):
+            # Clicking the in-handle also jumps to that frame
+            f = self._in if self._drag == "in" else self._current
+            self.frame_changed.emit(f)
+        elif self._drag == "out":
+            self.frame_changed.emit(self._out)
+        elif self._drag == "track":
+            f = self._x_to_frame(x)
+            self._current = f
+            self.frame_changed.emit(f)
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if self._drag is None or self._total <= 0:
+            return
+        f = self._x_to_frame(event.position().x())
+        if self._drag == "in":
+            f = max(0, min(f, self._out))
+            self._in = f
+            self.in_changed.emit(f)
+            self.frame_changed.emit(f)
+            self.update()
+        elif self._drag == "out":
+            f = max(self._in, min(f, self._total - 1))
+            self._out = f
+            self.out_changed.emit(f)
+            self.frame_changed.emit(f)
+            self.update()
+        elif self._drag in ("playhead", "track"):
+            f = max(0, min(f, self._total - 1))
+            self._current = f
+            self.frame_changed.emit(f)
+            self.update()
+
+    def mouseReleaseEvent(self, _event):
+        self._drag = None
+
+
 # ── Persistent colour palette bar ───────────────────────────────────────────
 
 class PaletteSwatchButton(QWidget):
@@ -405,6 +645,12 @@ class RotoTool(QMainWindow):
         self.palette_bar.color_selected.connect(self._on_palette_color_selected)
         self.palette_bar.more_button.clicked.connect(self._open_picker_from_bar)
 
+        # ── Timeline bar (below palette, above canvas) ────────────────────────
+        self.timeline_bar = TimelineBar()
+        self.timeline_bar.frame_changed.connect(self._on_timeline_frame)
+        self.timeline_bar.in_changed.connect(self._on_timeline_in)
+        self.timeline_bar.out_changed.connect(self._on_timeline_out)
+
         # Wrap the view + palette bar in a container so the palette sits above
         # the canvas without going into the status bar.
         _central = QWidget()
@@ -412,6 +658,7 @@ class RotoTool(QMainWindow):
         _vbox.setContentsMargins(0, 0, 0, 0)
         _vbox.setSpacing(0)
         _vbox.addWidget(self.palette_bar)
+        _vbox.addWidget(self.timeline_bar)
         _vbox.addWidget(self.view)
         self.setCentralWidget(_central)
 
@@ -617,6 +864,7 @@ class RotoTool(QMainWindow):
         self.setWindowTitle(f"Antigravity Roto-Tool - {os.path.basename(filepath)}")
         self.current_points = []
         self.view.resetTransform()
+        self._update_timeline()
         self.update_frame()
         
     def open_project(self):
@@ -694,6 +942,7 @@ class RotoTool(QMainWindow):
 
             self.leave_edit_mode(save=False) # Safely drop unsaved drawing or editing when scrubbing frames
             self.redraw_polygons()
+            self.timeline_bar.set_current(self.current_game_frame)
 
             
     def clear_current_frame(self):
@@ -818,6 +1067,8 @@ class RotoTool(QMainWindow):
         end = self.project.end_frame if self.project.end_frame is not None else self.total_frames - 1
         if end < self.project.start_frame:
             self.project.end_frame = self.project.start_frame
+        out_f = self.project.end_frame if self.project.end_frame is not None else self.total_frames - 1
+        self.timeline_bar.set_in_out(self.project.start_frame, out_f)
         self.set_status(f"In-point set: frame {self.project.start_frame}")
 
     def _set_out_point(self):
@@ -827,6 +1078,7 @@ class RotoTool(QMainWindow):
         self.project.end_frame = self.current_game_frame
         if self.project.start_frame > self.project.end_frame:
             self.project.start_frame = self.project.end_frame
+        self.timeline_bar.set_in_out(self.project.start_frame, self.project.end_frame)
         self.set_status(f"Out-point set: frame {self.project.end_frame}")
 
     def _open_playback_window(self):
@@ -897,6 +1149,11 @@ class RotoTool(QMainWindow):
 
         # Registration marker always on top
         self._place_registration_marker()
+
+        # Refresh timeline data ticks (which frames have polygon data may have changed)
+        if self.cap:
+            frames_with_data = {f for f in self.project.frames if self.project.frames[f]}
+            self.timeline_bar.set_data_frames(frames_with_data)
 
     def scene_mousePressEvent(self, event):
         if not self.cap or event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -1021,6 +1278,50 @@ class RotoTool(QMainWindow):
             color = self._pick_color(self.current_polygon_color)
             if color:
                 self.current_polygon_color = color
+
+    # ------------------------------------------------------------------ timeline helpers
+
+    def _update_timeline(self):
+        """Push all current state to the TimelineBar in one call."""
+        if not self.cap:
+            return
+        out_f = self.project.end_frame if self.project.end_frame is not None \
+                else self.total_frames - 1
+        self.timeline_bar.set_total(self.total_frames)
+        self.timeline_bar.set_current(self.current_game_frame)
+        self.timeline_bar.set_in_out(self.project.start_frame, out_f)
+        # Collect frames that have polygon data for tick marks
+        frames_with_data = {f for f in self.project.frames if self.project.frames[f]}
+        self.timeline_bar.set_data_frames(frames_with_data)
+
+    def _on_timeline_frame(self, frame: int):
+        """User clicked/dragged the timeline playhead → jump to that frame."""
+        if not self.cap:
+            return
+        self.current_game_frame = max(0, min(frame, self.total_frames - 1))
+        self.update_frame()
+
+    def _on_timeline_in(self, frame: int):
+        """User dragged the in-point handle."""
+        if not self.cap:
+            return
+        self.project.start_frame = frame
+        out_f = self.project.end_frame if self.project.end_frame is not None \
+                else self.total_frames - 1
+        if out_f < frame:
+            self.project.end_frame = frame
+        self.set_status(f"In-point: frame {frame}")
+        self._dirty = True
+
+    def _on_timeline_out(self, frame: int):
+        """User dragged the out-point handle."""
+        if not self.cap:
+            return
+        self.project.end_frame = frame
+        if self.project.start_frame > frame:
+            self.project.start_frame = frame
+        self.set_status(f"Out-point: frame {frame}")
+        self._dirty = True
 
     # ------------------------------------------------------------------ z-order helpers
 
