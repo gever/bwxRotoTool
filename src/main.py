@@ -3,16 +3,151 @@ import sys
 import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
                              QGraphicsPixmapItem, QFileDialog, QMessageBox, QProgressDialog,
-                             QVBoxLayout, QWidget, QLabel, QToolBar, QGraphicsPolygonItem, 
-                             QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem)
+                             QVBoxLayout, QHBoxLayout, QWidget, QLabel, QToolBar,
+                             QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsItem,
+                             QGraphicsLineItem, QPushButton, QSizePolicy, QFrame)
 from PyQt6.QtGui import (QImage, QPixmap, QAction, QPolygonF, QPen, QBrush, QColor,
-                         QKeySequence, QPainterPath)
-from PyQt6.QtCore import Qt, QPointF, QSizeF
+                         QKeySequence, QPainterPath, QPainter)
+from PyQt6.QtCore import Qt, QPointF, QSizeF, QRectF, pyqtSignal
 
 from color_picker import ColorPickerDialog
 from video_processor import convert_to_15fps
 from project_model import RotoProject
 from playback import PlaybackWindow
+
+# ── Persistent colour palette bar ───────────────────────────────────────────
+
+class PaletteSwatchButton(QWidget):
+    """A single clickable colour swatch for the palette bar."""
+    clicked = pyqtSignal(QColor)
+
+    _SWATCH_SIZE = 28
+
+    def __init__(self, color: QColor, parent=None):
+        super().__init__(parent)
+        self._color = QColor(color)
+        self._active = False
+        self.setFixedSize(self._SWATCH_SIZE + 4, self._SWATCH_SIZE + 4)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(color.name().upper())
+
+    def set_color(self, color: QColor):
+        self._color = QColor(color)
+        self.setToolTip(color.name().upper())
+        self.update()
+
+    def set_active(self, active: bool):
+        self._active = active
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        s = self._SWATCH_SIZE
+        x = (self.width() - s) // 2
+        y = (self.height() - s) // 2
+        rect = QRectF(x, y, s, s)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 5, 5)
+        p.fillPath(path, QBrush(self._color))
+        if self._active:
+            p.setPen(QPen(QColor(255, 255, 255, 230), 2.5))
+        else:
+            p.setPen(QPen(QColor(255, 255, 255, 60), 1))
+        p.drawPath(path)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._color)
+
+
+class ColorPaletteBar(QWidget):
+    """
+    Persistent horizontal strip that lives below the menu bar.
+    Shows the current active colour + up to 16 history swatches.
+    Emits color_selected(QColor) when the user clicks a swatch.
+    """
+    color_selected = pyqtSignal(QColor)
+
+    _MAX_HISTORY = 16
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(40)
+        self.setStyleSheet(
+            "ColorPaletteBar { background: #1a1b2e; border-bottom: 1px solid #2e3050; }"
+        )
+        self._history: list[QColor] = []
+        self._active_color: QColor = QColor(0, 255, 0)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(4)
+
+        # "Active" swatch (current color) — slightly larger with a label
+        active_label = QLabel("Color:")
+        active_label.setStyleSheet("color: #6e7a9a; font-size: 10px; letter-spacing: 1px;")
+        layout.addWidget(active_label)
+
+        self._active_swatch = PaletteSwatchButton(self._active_color)
+        self._active_swatch.set_active(True)
+        self._active_swatch.clicked.connect(self.color_selected)
+        layout.addWidget(self._active_swatch)
+
+        # Thin separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #2e3050;")
+        layout.addWidget(sep)
+
+        # History swatches container (populated dynamically)
+        self._history_swatches: list[PaletteSwatchButton] = []
+        self._swatch_container = QWidget()
+        self._swatch_layout = QHBoxLayout(self._swatch_container)
+        self._swatch_layout.setContentsMargins(0, 0, 0, 0)
+        self._swatch_layout.setSpacing(4)
+        layout.addWidget(self._swatch_container)
+
+        layout.addStretch()
+
+        # "…" button to open the full picker
+        self._more_btn = QPushButton("…")
+        self._more_btn.setFixedSize(28, 28)
+        self._more_btn.setToolTip("Open full color picker  (Ctrl+P)")
+        self._more_btn.setStyleSheet(
+            "QPushButton { background: #252638; color: #9aa5c4; border: 1px solid #383a5c;"
+            "  border-radius: 6px; font-size: 14px; padding: 0; }"
+            "QPushButton:hover { background: #353859; border-color: #4f6ed4; }"
+        )
+        layout.addWidget(self._more_btn)
+
+    # ------------------------------------------------------------------ public
+
+    @property
+    def more_button(self) -> QPushButton:
+        return self._more_btn
+
+    def set_active_color(self, color: QColor):
+        """Update the prominent active-color swatch."""
+        self._active_color = QColor(color)
+        self._active_swatch.set_color(color)
+
+    def set_history(self, history: list[QColor]):
+        """Rebuild the history swatches from the given list."""
+        self._history = list(history[: self._MAX_HISTORY])
+
+        # Remove old widgets
+        for sw in self._history_swatches:
+            self._swatch_layout.removeWidget(sw)
+            sw.deleteLater()
+        self._history_swatches.clear()
+
+        for color in self._history:
+            sw = PaletteSwatchButton(color)
+            sw.clicked.connect(self.color_selected)
+            self._swatch_layout.addWidget(sw)
+            self._history_swatches.append(sw)
+
 
 # ── Registration crosshair marker ────────────────────────────────────────────
 
@@ -111,7 +246,7 @@ class RotoPolygonItem(QGraphicsPolygonItem):
         self.setBrush(QBrush(QColor(self.color.red(), self.color.green(), self.color.blue(), fill_alpha)))
         self.setPen(QPen(self.color, 2))
         
-        self.z_val = self.poly_dict.get("z_index", 0)
+        self.z_val = max(0, self.poly_dict.get("z_index", 0))
         self.setZValue(self.z_val)
         
         self.handles = []
@@ -262,8 +397,24 @@ class RotoTool(QMainWindow):
         self.setCentralWidget(self.view)
         
         self.bg_item = QGraphicsPixmapItem()
+        self.bg_item.setZValue(-1)
         self.scene.addItem(self.bg_item)
-        
+
+        # ── Palette bar (persistent, lives between menu and canvas) ──────────
+        self.palette_bar = ColorPaletteBar()
+        self.palette_bar.color_selected.connect(self._on_palette_color_selected)
+        self.palette_bar.more_button.clicked.connect(self._open_picker_from_bar)
+
+        # Wrap the view + palette bar in a container so the palette sits above
+        # the canvas without going into the status bar.
+        _central = QWidget()
+        _vbox = QVBoxLayout(_central)
+        _vbox.setContentsMargins(0, 0, 0, 0)
+        _vbox.setSpacing(0)
+        _vbox.addWidget(self.palette_bar)
+        _vbox.addWidget(self.view)
+        self.setCentralWidget(_central)
+
         # Status Label
         self.status_label = QLabel("Frame: 0 / 0 | DRAW MODE")
         self.statusBar().addWidget(self.status_label)
@@ -274,6 +425,7 @@ class RotoTool(QMainWindow):
         self.temp_dots = []
         self.current_polygon_color = QColor(0, 255, 0)
         self.opaque_fill = False   # Space toggles transparent ↔ opaque fill
+        self.palette_bar.set_active_color(self.current_polygon_color)
 
         # Copy buffer: holds a polygon dict ready to paste
         self.copy_buffer: dict | None = None
@@ -316,6 +468,8 @@ class RotoTool(QMainWindow):
                     c = QColor(hex_str)
                     if c.isValid():
                         self.color_history.append(c)
+                # Sync palette bar with restored history
+                self.palette_bar.set_history(self.color_history)
                 last_proj = data.get("last_project")
                 if last_proj and os.path.exists(last_proj):
                     reply = QMessageBox.question(self, "Resume Last Project", f"Would you like to resume your last project?\n\n{last_proj}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -776,6 +930,8 @@ class RotoTool(QMainWindow):
         self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
         self.active_edit_item.show_handles()
         self.view.setCursor(Qt.CursorShape.ArrowCursor)
+        # Reflect the selected polygon's colour in the palette bar
+        self.palette_bar.set_active_color(self.active_edit_item.color)
         self.set_status("EDIT MODE - [Esc] to cancel, [Enter] to save")
 
     def leave_edit_mode(self, save=True):
@@ -796,6 +952,8 @@ class RotoTool(QMainWindow):
         self.active_edit_item = None
         self.scene.clearSelection()
         self.view.setCursor(Qt.CursorShape.CrossCursor)
+        # Restore palette to show the current draw colour
+        self.palette_bar.set_active_color(self.current_polygon_color)
         self.set_status("DRAW MODE")
         
         if not save:
@@ -824,8 +982,45 @@ class RotoTool(QMainWindow):
             self.color_history.insert(0, color)
             self.color_history = self.color_history[:16]
             self.save_settings()
+            # Sync the palette bar
+            self.palette_bar.set_active_color(color)
+            self.palette_bar.set_history(self.color_history)
             return color
         return None
+
+    # ------------------------------------------------------------------ palette bar handlers
+
+    def _on_palette_color_selected(self, color: QColor):
+        """Called when the user clicks a swatch in the persistent palette bar."""
+        if self.mode == "EDIT" and self.active_edit_item:
+            # Apply to the currently selected polygon
+            self.active_edit_item.color = color
+            self.active_edit_item.setBrush(self._fill_brush(color))
+            self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
+            self._dirty = True
+        # Always update the draw color and the active swatch
+        self.current_polygon_color = color
+        self.palette_bar.set_active_color(color)
+        # Add to history
+        self.color_history = [c for c in self.color_history if c.name() != color.name()]
+        self.color_history.insert(0, color)
+        self.color_history = self.color_history[:16]
+        self.palette_bar.set_history(self.color_history)
+        self.save_settings()
+
+    def _open_picker_from_bar(self):
+        """Open the full color picker (same as Ctrl+P) from the palette bar '…' button."""
+        if self.mode == "EDIT" and self.active_edit_item:
+            color = self._pick_color(self.active_edit_item.color)
+            if color:
+                self.active_edit_item.color = color
+                self.current_polygon_color = color
+                self.active_edit_item.setBrush(self._fill_brush(color))
+                self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
+        else:
+            color = self._pick_color(self.current_polygon_color)
+            if color:
+                self.current_polygon_color = color
 
     def keyPressEvent(self, event):
         if not self.cap: return
@@ -906,11 +1101,13 @@ class RotoTool(QMainWindow):
                     self.current_polygon_color = color
                     self.active_edit_item.setBrush(self._fill_brush(color))
                     self.active_edit_item.setPen(QPen(Qt.GlobalColor.white, 3, Qt.PenStyle.DashLine))
+                    self.palette_bar.set_active_color(color)
             else:
                 # No polygon selected — pick the default draw color for new polygons
                 color = self._pick_color(self.current_polygon_color)
                 if color:
                     self.current_polygon_color = color
+                    self.palette_bar.set_active_color(color)
             return
             
         if self.mode == "DRAW":
@@ -962,7 +1159,7 @@ class RotoTool(QMainWindow):
             elif key == Qt.Key.Key_BracketLeft:
                 if self.active_edit_item:
                     dec = 100 if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else 1
-                    self.active_edit_item.z_val -= dec
+                    self.active_edit_item.z_val = max(0, self.active_edit_item.z_val - dec)
                     self.active_edit_item.setZValue(self.active_edit_item.z_val)
 
 if __name__ == "__main__":

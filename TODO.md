@@ -6,6 +6,8 @@
 - [ ] FEAT: import polygons from json or bwxBASIC ARRAY format.
 - [X] FEAT: add keyboard shortcuts for common operations (space to play/pause, arrow keys to step through frames, etc.)
 - [X] FEAT: add support for multiple polygons per frame.
-- [x] FEAT: add support for editing polygons; changing the fill color, and the drawing order (stacking). <ctrl-P> should pop up the color palette, clicking on the polygon should select it; the color palette should update to show the current fill color of the current polygon, vertex handles should appear, and the selected polygon should be highlighted. Clicking on a vertex handle should highlight it, dragging a vertex handle should move the vertex, and the selected polygon should be updated. Hitting delete or backspace when a polygon is selected should delete it, and hitting delete or backspace when a vertex handle is selected should delete it. 
+- [X] FEAT: add support for editing polygons; changing the fill color, and the drawing order (stacking). <ctrl-P> should pop up the color palette, clicking on the polygon should select it; the color palette should update to show the current fill color of the current polygon, vertex handles should appear, and the selected polygon should be highlighted. Clicking on a vertex handle should highlight it, dragging a vertex handle should move the vertex, and the selected polygon should be updated. Hitting delete or backspace when a polygon is selected should delete it, and hitting delete or backspace when a vertex handle is selected should delete it. 
 - [x] FEAT: add View menu to set a specific zoom on the workspace, and support shift-drag to pan the workspace. Support zoom in/out with mouse wheel (by 10% increments).
 - [ ] bug: polygons can be pushed back behind the background image. 
+- [ ] FEAT: add support for deleting a vertex on a polygon.
+- [X] FEAT: add support for deleting a polygon.
