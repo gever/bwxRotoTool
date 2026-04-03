@@ -38,8 +38,12 @@ When you open an iPhone clip (or any variable framerate video), the tool automat
 ### Rotoscope Drawing
 - **Add Points:** Left-click anywhere on the video frame to drop a vertex.
 - **Close Polygon:** Right-click (or press `Enter`) to seal the polygon and commit it.
-- **Delete Polygon:** Press `Backspace` to clear all polygons on the current frame.
+- **Delete Polygon:** Press `Backspace` to clear currently selected polygon.
 - **Delete Vertex:** Right-click on a vertex to delete it.
+- **Raise in Drawing Order:** `]` — moves the selected polygon one rank forward (closer to front).
+- **Lower in Drawing Order:** `[` — moves the selected polygon one rank backward (closer to back). Cannot go behind the video frame.
+- **Bring to Front:** `}` — moves the selected polygon to the highest rank (drawn on top of all others).
+- **Send to Back:** `{` — moves the selected polygon to rank 1 (drawn behind all others, but still in front of the video frame). All other polygons are renumbered to maintain a contiguous 1..N ranking.
 
 ### Project Saving & Export
 - **Save Projects:** Save your progress natively into `.bwxroto` JSON files, preserving exactly what polygons sit on which frames.

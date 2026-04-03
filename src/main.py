@@ -246,7 +246,7 @@ class RotoPolygonItem(QGraphicsPolygonItem):
         self.setBrush(QBrush(QColor(self.color.red(), self.color.green(), self.color.blue(), fill_alpha)))
         self.setPen(QPen(self.color, 2))
         
-        self.z_val = max(0, self.poly_dict.get("z_index", 0))
+        self.z_val = max(1, self.poly_dict.get("z_index", 1))
         self.setZValue(self.z_val)
         
         self.handles = []
@@ -1022,9 +1022,27 @@ class RotoTool(QMainWindow):
             if color:
                 self.current_polygon_color = color
 
+    # ------------------------------------------------------------------ z-order helpers
+
+    def _get_ordered_poly_items(self) -> list:
+        """Return all RotoPolygonItems in the scene sorted by z_val (lowest first = back of stack)."""
+        return sorted(
+            [it for it in self.scene.items() if isinstance(it, RotoPolygonItem)],
+            key=lambda it: it.z_val
+        )
+
+    def _apply_z_order(self, ordered_items: list):
+        """Assign contiguous ranks 1..N to *ordered_items* (index 0 = back) and
+        update both the item's z_val and the Qt scene Z-value.  Marks the frame dirty."""
+        for rank, item in enumerate(ordered_items, start=1):
+            item.z_val = rank
+            item.setZValue(rank)
+        self._dirty = True
+
     def keyPressEvent(self, event):
         if not self.cap: return
         key = event.key()
+
         
         # Opaque / transparent fill toggle (Space)
         if key == Qt.Key.Key_Space:
@@ -1121,7 +1139,9 @@ class RotoTool(QMainWindow):
                 self.update_frame()
             elif key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
                 if len(self.current_points) > 2:
-                    poly_dict = {"points": self.current_points, "color": self.current_polygon_color.name(), "z_index": 0}
+                    # New polygon gets rank N+1 (on top of the current stack)
+                    n = len(self.project.get_polygons(self.current_game_frame))
+                    poly_dict = {"points": self.current_points, "color": self.current_polygon_color.name(), "z_index": n + 1}
                     self.project.add_polygon(self.current_game_frame, poly_dict)
                     self._dirty = True
                 self.current_points = []
@@ -1151,16 +1171,32 @@ class RotoTool(QMainWindow):
                         self.scene.removeItem(item)
                         self._dirty = True
                         self.leave_edit_mode(save=True)
-            elif key == Qt.Key.Key_BracketRight:
+            elif key == Qt.Key.Key_BracketRight:   # ] raise by one
                 if self.active_edit_item:
-                    inc = 100 if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else 1
-                    self.active_edit_item.z_val += inc
-                    self.active_edit_item.setZValue(self.active_edit_item.z_val)
-            elif key == Qt.Key.Key_BracketLeft:
+                    items = self._get_ordered_poly_items()
+                    idx = items.index(self.active_edit_item)
+                    if idx < len(items) - 1:
+                        items[idx], items[idx + 1] = items[idx + 1], items[idx]
+                    self._apply_z_order(items)
+            elif key == Qt.Key.Key_BracketLeft:    # [ lower by one
                 if self.active_edit_item:
-                    dec = 100 if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else 1
-                    self.active_edit_item.z_val = max(0, self.active_edit_item.z_val - dec)
-                    self.active_edit_item.setZValue(self.active_edit_item.z_val)
+                    items = self._get_ordered_poly_items()
+                    idx = items.index(self.active_edit_item)
+                    if idx > 0:
+                        items[idx], items[idx - 1] = items[idx - 1], items[idx]
+                    self._apply_z_order(items)
+            elif key == Qt.Key.Key_BraceRight:     # } bring to front
+                if self.active_edit_item:
+                    items = self._get_ordered_poly_items()
+                    items.remove(self.active_edit_item)
+                    items.append(self.active_edit_item)
+                    self._apply_z_order(items)
+            elif key == Qt.Key.Key_BraceLeft:      # { send to back
+                if self.active_edit_item:
+                    items = self._get_ordered_poly_items()
+                    items.remove(self.active_edit_item)
+                    items.insert(0, self.active_edit_item)
+                    self._apply_z_order(items)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
