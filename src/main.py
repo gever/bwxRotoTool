@@ -47,7 +47,7 @@ class TimelineBar(QWidget):
     _C_BG        = QColor(0x0e, 0x0f, 0x1e)
     _C_TRACK     = QColor(0x25, 0x26, 0x40)
     _C_RANGE     = QColor(0x2e, 0x50, 0x8a, 180)
-    _C_TICK      = QColor(0x6c, 0x8f, 0xf0, 140)
+    _C_TICK      = QColor(0x4c, 0xd9, 0x6e, 180)   # light green for drawn frames
     _C_IN        = QColor(0xf5, 0xc5, 0x18)   # yellow
     _C_OUT       = QColor(0xf5, 0xc5, 0x18)
     _C_PLAYHEAD  = QColor(0xff, 0xff, 0xff)
@@ -156,13 +156,16 @@ class TimelineBar(QWidget):
             rng_path.addRoundedRect(rng, 2, 2)
             p.fillPath(rng_path, self._C_RANGE)
 
-        # ── per-frame data ticks ──
-        p.setPen(QPen(self._C_TICK, 1))
-        tick_top    = tr.top() + 1
-        tick_bottom = tr.bottom() - 1
-        for f in self._has_data:
-            fx = self._frame_to_x(f)
-            p.drawLine(QPointF(fx, tick_top), QPointF(fx, tick_bottom))
+        # ── per-frame data rectangles (light-green filled blocks) ──
+        if self._total > 1 and self._has_data:
+            px_per_frame = tr.width() / (self._total - 1)
+            block_w = max(2.0, px_per_frame - 0.5)  # at least 2 px wide
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(self._C_TICK))
+            for f in self._has_data:
+                fx = self._frame_to_x(f)
+                rect = QRectF(fx - block_w / 2, tr.top() + 1, block_w, tr.height() - 2)
+                p.drawRect(rect)
 
         # ── track border ──
         p.setPen(QPen(QColor(255, 255, 255, 25), 1))
