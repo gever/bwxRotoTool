@@ -18,3 +18,5 @@
 
 - [ ] FEAT14: add command to tools menu to flip video vertically.
 - [ ] FEAT15: add command to tools menu to rotate video 90 degrees clockwise (multiple times to allow for 180 and 270 degree rotations).
+- [X] BUG02: the order of colors in the color tiles changes when a color is selected. This is unexpected behabior for the users who expect the color to be in the same position. The fix is to just add colors in on left when new colors are created, pushing older colors to the right. To encourage minimal color usage, let's only keep the most recent 16 colors.
+

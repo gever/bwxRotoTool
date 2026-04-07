@@ -1372,19 +1372,26 @@ class RotoTool(QMainWindow):
 
     def _pick_color(self, initial: QColor) -> QColor | None:
         """Open the custom color picker and return the chosen color (or None).
-        Automatically prepends the chosen color to self.color_history."""
+        Adds the chosen color to the LEFT of history only if it is new;
+        existing colors stay in their current position."""
         color = ColorPickerDialog.pick(initial, self.color_history, self)
         if color and color.isValid():
-            # Add to front of history, deduplicate, cap at 16
-            self.color_history = [c for c in self.color_history if c.name() != color.name()]
-            self.color_history.insert(0, color)
-            self.color_history = self.color_history[:16]
+            self._add_to_history(color)
             self.save_settings()
             # Sync the palette bar
             self.palette_bar.set_active_color(color)
             self.palette_bar.set_history(self.color_history)
             return color
         return None
+
+    def _add_to_history(self, color: QColor):
+        """Add *color* to the left of the history list only if it is not already
+        present.  Existing colours keep their position (BUG02 fix).
+        The list is capped at 16 entries."""
+        if not any(c.name() == color.name() for c in self.color_history):
+            self.color_history.insert(0, color)
+            self.color_history = self.color_history[:16]
+
 
     # ------------------------------------------------------------------ palette bar handlers
 
@@ -1399,10 +1406,8 @@ class RotoTool(QMainWindow):
         # Always update the draw color and the active swatch
         self.current_polygon_color = color
         self.palette_bar.set_active_color(color)
-        # Add to history
-        self.color_history = [c for c in self.color_history if c.name() != color.name()]
-        self.color_history.insert(0, color)
-        self.color_history = self.color_history[:16]
+        # Add to history only if new — existing colours stay in place (BUG02)
+        self._add_to_history(color)
         self.palette_bar.set_history(self.color_history)
         self.save_settings()
 
