@@ -11,10 +11,10 @@
 - [X] BUG01: polygons can be pushed back behind the background image. 
 - [ ] FEAT09: add support for deleting a vertex on a polygon.
 - [X] FEAT10: add support for deleting a polygon.
-- [ ] FEAT11: add command to file menu to export as JSON for use in p5.js based projects (add a sample p5.js project to the repo that illustrates how to load and draw the polygon data).
+- [X] FEAT11: add command to file menu to export as JSON for use in p5.js based projects (add a sample p5.js project to the repo that illustrates how to load and draw the polygon data).
 - [X] FEAT12: add command to file menu to import JSON polygon data.
 
 - [X] FEAT13: add command to tools menu to flip video horizontally (and update the polygon data accordingly).
 
-- [ ] FEAT14: add command to tools menu to flip video vertically. This setting must be saved in the .bwxroto file.
-- [ ] FEAT15: add command to tools menu to rotate video 90 degrees clockwise (multiple times to allow for 180 and 270 degree rotations). This setting must be saved in the .bwxroto file.
+- [ ] FEAT14: add command to tools menu to flip video vertically.
+- [ ] FEAT15: add command to tools menu to rotate video 90 degrees clockwise (multiple times to allow for 180 and 270 degree rotations).
