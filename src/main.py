@@ -559,17 +559,25 @@ class RotoScene(QGraphicsScene):
                 return
 
             if self.main_window.mode == "EDIT":
-                # If they click the background, exit edit mode smoothly
+                # Ctrl+click → insert a vertex on the nearest edge (FEAT16)
+                if (event.button() == Qt.MouseButton.LeftButton
+                        and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                    self.main_window._try_insert_vertex(event.scenePos())
+                    event.accept()
+                    return
+
+                # Plain click on the background → leave edit mode
                 item = self.itemAt(event.scenePos(), self.main_window.view.transform())
                 if item == self.main_window.bg_item:
                     self.main_window.leave_edit_mode(save=True)
                     event.accept()
                     return
-            
+
             super().mousePressEvent(event)
             self.main_window.scene_mousePressEvent(event)
         else:
             super().mousePressEvent(event)
+
 
 
 class RotoGraphicsView(QGraphicsView):
@@ -1480,6 +1488,76 @@ class RotoTool(QMainWindow):
             self.project.start_frame = frame
         self.set_status(f"Out-point: frame {frame}")
         self._dirty = True
+
+    def _try_insert_vertex(self, scene_pos: QPointF):
+        """Ctrl+click in EDIT mode: insert a new vertex on the nearest polygon edge.
+
+        Works in item-local coordinates so it remains correct after the polygon
+        has been panned/dragged.  Tolerance is expressed in screen pixels and
+        converted to local units via the current view zoom.
+        """
+        poly_item = self.active_edit_item
+        if not poly_item:
+            self.set_status("Ctrl+click: no polygon selected")
+            return
+
+        poly = poly_item.polygon()
+        n = poly.count()
+        if n < 2:
+            return
+
+        # Map the click from scene → item-local space
+        local_pos = poly_item.mapFromScene(scene_pos)
+
+        # Tolerance: 12 screen pixels, converted to scene units via view zoom,
+        # then to item-local units (for unscaled items scene ≡ local).
+        view_scale = self.view.transform().m11()
+        tol_local  = 12.0 / view_scale
+        tol_sq     = tol_local ** 2
+
+        best_dist_sq = tol_sq
+        best_edge    = -1
+        best_pt      = QPointF()
+
+        for i in range(n):
+            a = poly.at(i)
+            b = poly.at((i + 1) % n)
+            dx = b.x() - a.x()
+            dy = b.y() - a.y()
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq < 1e-10:
+                continue
+
+            # Nearest point on segment a→b
+            t = ((local_pos.x() - a.x()) * dx + (local_pos.y() - a.y()) * dy) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            nx = a.x() + t * dx
+            ny = a.y() + t * dy
+            dist_sq = (nx - local_pos.x()) ** 2 + (ny - local_pos.y()) ** 2
+
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_edge    = i
+                best_pt      = QPointF(nx, ny)
+
+        if best_edge == -1:
+            self.set_status("Ctrl+click: click closer to a polygon edge to insert a vertex")
+            return
+
+        # Rebuild polygon with new vertex inserted after vertex best_edge
+        poly_item.hide_handles()
+        new_poly = QPolygonF()
+        for i in range(n):
+            new_poly.append(poly.at(i))
+            if i == best_edge:
+                new_poly.append(best_pt)
+        poly_item.setPolygon(new_poly)
+        poly_item.show_handles()
+        self._dirty = True
+        self.set_status(
+            f"Vertex inserted on edge {best_edge}\u2192{(best_edge + 1) % n}  "
+            f"(polygon now has {new_poly.count()} vertices)"
+        )
 
     # ------------------------------------------------------------------ z-order helpers
 

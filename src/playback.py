@@ -233,6 +233,7 @@ class PlaybackWindow(QDialog):
         self._canvas.project = project
         self._canvas.total_frames = total_frames
         self._canvas.video_size = video_size
+        self._canvas.current_frame = project.start_frame if project else 0
 
         # ── Controls ────────────────────────────────────────────────────────
         self._play_btn = QPushButton("⏸ Pause")
@@ -298,6 +299,8 @@ class PlaybackWindow(QDialog):
         end = min(end, self._total_frames - 1)
 
         next_frame = self._canvas.current_frame + 1
+        if next_frame < start:
+            next_frame = start
         if next_frame > end:
             if self._looping:
                 next_frame = start

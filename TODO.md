@@ -20,5 +20,6 @@
 - [ ] FEAT15: add command to tools menu to rotate video 90 degrees clockwise (multiple times to allow for 180 and 270 degree rotations).
 - [X] BUG02: the order of colors in the color tiles changes when a color is selected. This is unexpected behabior for the users who expect the color to be in the same position. The fix is to just add colors in on left when new colors are created, pushing older colors to the right. To encourage minimal color usage, let's only keep the most recent 16 colors.
 - [X] BUG03: user reports that they can't draw a new polygon on top of onion-skin polygons. The onion-skin polygons should not receive any events.
+- [X] FEAT16: add support for adding a vertex to a polygon by ctrl-clicking on an edge.
 
 
