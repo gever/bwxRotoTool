@@ -5,7 +5,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QGraphicsView, QGraphics
                              QGraphicsPixmapItem, QFileDialog, QMessageBox, QProgressDialog,
                              QVBoxLayout, QHBoxLayout, QWidget, QLabel, QToolBar,
                              QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsItem,
-                             QGraphicsLineItem, QPushButton, QSizePolicy, QFrame)
+                             QGraphicsLineItem, QPushButton, QSizePolicy, QFrame,
+                             QDialog, QDialogButtonBox, QRadioButton)
+
 from PyQt6.QtGui import (QImage, QPixmap, QAction, QPolygonF, QPen, QBrush, QColor,
                          QKeySequence, QPainterPath, QPainter)
 from PyQt6.QtCore import Qt, QPointF, QSizeF, QRectF, pyqtSignal
@@ -757,6 +759,14 @@ class RotoTool(QMainWindow):
         
         self.export_bwx_action = QAction("Export to bwxBASIC ARRAY...", self)
         self.export_bwx_action.triggered.connect(self.export_bwxbasic)
+
+        self.export_json_action = QAction("Export Polygon Data as JSON...", self)
+        self.export_json_action.setToolTip("Export all frames as a clean JSON file (for p5.js or other tools)")
+        self.export_json_action.triggered.connect(self.export_json)
+
+        self.import_json_action = QAction("Import Polygon Data from JSON...", self)
+        self.import_json_action.setToolTip("Import polygon data from a bwxRotoTool JSON export")
+        self.import_json_action.triggered.connect(self.import_json_data)
         
         self.clear_frame_action = QAction("Clear Current Frame", self)
         self.clear_frame_action.triggered.connect(self.clear_current_frame)
@@ -824,6 +834,9 @@ class RotoTool(QMainWindow):
         file_menu.addAction(self.save_project_as_action)
         file_menu.addSeparator()
         file_menu.addAction(self.export_bwx_action)
+        file_menu.addAction(self.export_json_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self.import_json_action)
         
         edit_menu = menubar.addMenu("Edit")
         edit_menu.addAction(self.clear_frame_action)
@@ -930,6 +943,77 @@ class RotoTool(QMainWindow):
             if not filepath.endswith('.bas') and not filepath.endswith('.txt'):
                 filepath += '.bas'
             self.project.export_bwxbasic(filepath)
+
+    def export_json(self):
+        """Export all polygon + registration data to a clean JSON file."""
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Export Polygon Data as JSON", "", "JSON Files (*.json)"
+        )
+        if not filepath:
+            return
+        if not filepath.endswith('.json'):
+            filepath += '.json'
+        try:
+            self.project.export_json(filepath)
+            n_frames = len(self.project.frames)
+            self.set_status(f"Exported {n_frames} frame(s) to {os.path.basename(filepath)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write JSON:\n{e}")
+
+    def import_json_data(self):
+        """Import polygon data from a JSON file, prompting the user to choose a merge strategy."""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Import Polygon Data from JSON", "", "JSON Files (*.json)"
+        )
+        if not filepath:
+            return
+
+        # Ask how to merge
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Import — Choose Merge Strategy")
+        layout = QVBoxLayout(dialog)
+
+        info = QLabel(
+            "How should the imported data be merged with the current project?\n"
+            f"File: {os.path.basename(filepath)}"
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        rb_replace = QRadioButton("Replace all  — discard current polygon data and replace entirely")
+        rb_merge   = QRadioButton("Merge        — keep existing frames; only add frames not yet present")
+        rb_overwrite = QRadioButton("Overwrite    — add all frames, overwriting any that already exist")
+        rb_replace.setChecked(True)
+        layout.addWidget(rb_replace)
+        layout.addWidget(rb_merge)
+        layout.addWidget(rb_overwrite)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        if rb_replace.isChecked():
+            strategy = "replace"
+        elif rb_merge.isChecked():
+            strategy = "merge"
+        else:
+            strategy = "overwrite"
+
+        try:
+            imported, skipped = self.project.import_json(filepath, merge=strategy)
+            self._dirty = True
+            self.redraw_polygons()
+            self._update_timeline()
+            detail = f"{imported} frame(s) imported"
+            if skipped:
+                detail += f", {skipped} frame(s) {'overwritten' if strategy == 'overwrite' else 'skipped (already present)'}"
+            self.set_status(f"JSON import complete — {detail}")
+        except Exception as e:
+            QMessageBox.critical(self, "Import Failed", f"Could not import JSON:\n{e}")
 
     def update_frame(self):
         if not self.cap or self.total_frames == 0:

@@ -135,10 +135,127 @@ class RotoProject:
         for frame_idx, reg in self.registrations.items():
             self.registrations[frame_idx] = [video_width - reg[0], reg[1]]
 
-    # ── Export ───────────────────────────────────────────────────────────────
+    # ── Export / Import ──────────────────────────────────────────────────────
 
+
+    def export_json(self, filepath):
+        """Export polygon + registration data as a clean JSON file.
+
+        The format is intentionally video-agnostic so it can be loaded by
+        external tools (e.g. p5.js) without knowing about the source video.
+
+        Schema
+        ------
+        {
+          "meta": {"tool": "bwxRotoTool", "version": 1},
+          "frames": {
+            "0": [
+              {"color": "#00ff00", "z_index": 1,
+               "points": [[x1, y1], [x2, y2], ...]},
+              ...
+            ],
+            ...
+          },
+          "registrations": {
+            "0": [rx, ry],
+            ...
+          }
+        }
+
+        All frame and registration keys are strings (JSON requirement).
+        """
+        data = {
+            "meta": {"tool": "bwxRotoTool", "version": 1},
+            "frames": {str(k): v for k, v in self.frames.items()},
+            "registrations": {str(k): v for k, v in self.registrations.items()},
+        }
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def import_json(self, filepath, merge="replace"):
+        """Import polygon + registration data from a JSON file produced by export_json().
+
+        Parameters
+        ----------
+        merge : str
+            "replace"  – discard ALL current frames/registrations and replace
+                         with the imported data. (default)
+            "merge"    – keep existing frames; only add frames that are NOT
+                         already present in the project.
+            "overwrite"– add all imported frames, overwriting any frame that
+                         already exists in the project.
+
+        Returns
+        -------
+        (int, int)  – (frames_imported, frames_skipped)
+
+        Raises
+        ------
+        ValueError  – if the file cannot be parsed, or has an unexpected schema.
+        """
+        with open(filepath, "r") as f:
+            data = json.load(f)
+
+        # Support both the export_json format (has "meta" key) and raw
+        # {frame_idx: [polys]} dicts for basic compatibility.
+        if "frames" in data:
+            raw_frames = data["frames"]
+            raw_regs   = data.get("registrations", {})
+        else:
+            # Assume it's a bare {frame_idx: [polys]} mapping
+            raw_frames = data
+            raw_regs   = {}
+
+        # Validate and migrate polygon entries (same logic as from_dict)
+        imported_frames = {}
+        for k, polys in raw_frames.items():
+            if not isinstance(polys, list):
+                raise ValueError(f"Frame '{k}' is not a list of polygons.")
+            migrated = []
+            for poly in polys:
+                if isinstance(poly, list):
+                    migrated.append({"points": poly, "color": "#00ff00", "z_index": 0})
+                elif isinstance(poly, dict) and "points" in poly:
+                    migrated.append(poly)
+                else:
+                    raise ValueError(f"Unexpected polygon entry in frame '{k}': {poly!r}")
+            imported_frames[int(k)] = migrated
+
+        imported_regs = {int(k): v for k, v in raw_regs.items()}
+
+        imported = 0
+        skipped  = 0
+
+        if merge == "replace":
+            self.frames        = imported_frames
+            self.registrations = {**self.registrations, **imported_regs}
+            imported = len(imported_frames)
+        elif merge == "merge":
+            for frame_idx, polys in imported_frames.items():
+                if frame_idx in self.frames:
+                    skipped += 1
+                else:
+                    self.frames[frame_idx] = polys
+                    imported += 1
+            for frame_idx, reg in imported_regs.items():
+                if frame_idx not in self.registrations:
+                    self.registrations[frame_idx] = reg
+        elif merge == "overwrite":
+            for frame_idx, polys in imported_frames.items():
+                existed = frame_idx in self.frames
+                self.frames[frame_idx] = polys
+                if existed:
+                    skipped += 1   # counted as 'overwritten' not skipped
+                else:
+                    imported += 1
+            self.registrations.update(imported_regs)
+        else:
+            raise ValueError(f"Unknown merge strategy: {merge!r}")
+
+        return imported, skipped
 
     def export_bwxbasic(self, filepath):
+
         """Exports the project in a format digestible by bwxBASIC (DATA statements).
         All coordinates are relative to the per-frame registration point."""
         with open(filepath, 'w') as f:
