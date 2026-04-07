@@ -1070,11 +1070,15 @@ class RotoTool(QMainWindow):
                 pts = poly_dict.get("points", [])
                 if len(pts) > 2:
                     qpoly = QPolygonF([QPointF(x + dx, y + dy) for x, y in pts])
-                    self.scene.addPolygon(
+                    ghost = self.scene.addPolygon(
                         qpoly,
                         QPen(tint, 1, Qt.PenStyle.DashLine),
                         QBrush(QColor(tint.red(), tint.green(), tint.blue(), 40))
                     )
+                    # Ghost polygons must not intercept any mouse events (BUG03)
+                    ghost.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                    ghost.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+
 
     def _place_registration_marker(self):
         """Remove any existing reg marker and add a fresh one at the current frame's registration."""
@@ -1305,10 +1309,18 @@ class RotoTool(QMainWindow):
         
         if self.mode == "DRAW":
             if event.button() == Qt.MouseButton.LeftButton:
-                # If they clicked background, add point. If we already started a polygon, force add point ignoring items.
-                if clicked_item == self.bg_item or len(self.current_points) > 0:
+                # Only live interactive items block first-point placement.
+                # Onion-skin ghosts are plain QGraphicsPolygonItems (not subclassed)
+                # so itemAt() still finds them even though they don't accept mouse
+                # buttons — we must not let them block drawing (BUG03 follow-up).
+                is_blocking = isinstance(
+                    clicked_item,
+                    (RotoPolygonItem, VertexHandleItem, RegistrationMarkerItem)
+                )
+                if not is_blocking or len(self.current_points) > 0:
                     self.current_points.append([pos.x(), pos.y()])
                     self.redraw_polygons()
+
         # In edit mode, selection handles interaction, we don't drop points.
 
     def enter_edit_mode(self, poly_item):
