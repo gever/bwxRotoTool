@@ -3,18 +3,39 @@
 Shows the rotoscoped animation at 15 FPS on a plain background,
 with all coordinates normalized to each frame's registration point.
 The window is non-blocking so the artist can keep editing in the main view.
+
+Zoom / pan controls
+-------------------
+  Mouse wheel          — zoom in / out (10 % increments, anchored to cursor)
+  Shift + left drag    — pan
+  Middle-button drag   — pan
+  Double-click         — reset zoom & pan
+  Reset View button    — same as double-click
 """
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSizePolicy, QColorDialog, QFrame
 )
-from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPolygonF, QFont
+from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPolygonF, QFont, QTransform
 from PyQt6.QtCore import Qt, QTimer, QPointF, QSizeF, QRectF
 
 
 class _Canvas(QFrame):
-    """Internal widget that renders the animation frames."""
+    """Internal widget that renders the animation frames.
+
+    Coordinate system
+    -----------------
+    The 'base' transform maps the video into the canvas with a scale-to-fit
+    letterbox.  On top of that we layer a user-controlled pan/zoom
+    (_user_zoom, _pan_x, _pan_y). The combined transform is:
+
+        T_total = T_base · T_user
+
+    where T_user = translate(pan) · scale(zoom) anchored at the cursor.
+    """
+
+    _ZOOM_STEP = 1.10   # 10 % per wheel tick
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,8 +44,49 @@ class _Canvas(QFrame):
         self.total_frames = 0
         self.video_size = QSizeF(640, 480)       # native video dimensions
         self.bg_color = QColor(0, 0, 0)           # playback background
+
+        # User zoom/pan state
+        self._user_zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._panning = False
+        self._pan_last = QPointF()
+
         self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMouseTracking(True)
+
+    # ── Reset ────────────────────────────────────────────────────────────────
+
+    def reset_view(self):
+        self._user_zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self.update()
+
+    # ── Base (scale-to-fit) helpers ──────────────────────────────────────────
+
+    def _base_params(self):
+        """Return (scale, ox, oy, cx_centre, cy_centre) for the current canvas size."""
+        w, h = self.width(), self.height()
+        vw, vh = self.video_size.width(), self.video_size.height()
+        scale = min(w / vw, h / vh)
+        draw_w, draw_h = vw * scale, vh * scale
+        ox = (w - draw_w) / 2
+        oy = (h - draw_h) / 2
+        return scale, ox, oy, w / 2, h / 2
+
+    def _combined_transform(self) -> QTransform:
+        """Build the full painter transform: base scale-to-fit + user pan/zoom."""
+        # User transform: zoom around canvas centre then pan
+        cx, cy = self.width() / 2, self.height() / 2
+        t = QTransform()
+        t.translate(cx + self._pan_x, cy + self._pan_y)
+        t.scale(self._user_zoom, self._user_zoom)
+        t.translate(-cx, -cy)
+        return t
+
+    # ── Painting ─────────────────────────────────────────────────────────────
 
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -38,21 +100,15 @@ class _Canvas(QFrame):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No project loaded")
             return
 
-        # ── Compute scale-to-fit transform ──────────────────────────────────
-        w, h = self.width(), self.height()
-        vw, vh = self.video_size.width(), self.video_size.height()
-        scale = min(w / vw, h / vh)
-        draw_w, draw_h = vw * scale, vh * scale
-        ox = (w - draw_w) / 2       # centering offsets
-        oy = (h - draw_h) / 2
+        # ── Apply combined transform (base + user pan/zoom) ─────────────────
+        painter.setTransform(self._combined_transform())
+
+        # ── Compute base scale params (after transform is set) ──────────────
+        scale, ox, oy, cx_centre, cy_centre = self._base_params()
 
         # ── Registration-relative polygon drawing ───────────────────────────
-        # The registration point is mapped to the exact centre of the canvas.
         reg = self.project.get_registration(self.current_frame)
         reg_x, reg_y = reg[0], reg[1]
-
-        cx_centre = w / 2   # canvas centre
-        cy_centre = h / 2
 
         polys = self.project.get_polygons(self.current_frame)
         sorted_polys = sorted(polys, key=lambda p: p.get("z_index", 0))
@@ -63,9 +119,6 @@ class _Canvas(QFrame):
                 continue
             color = QColor(poly_dict.get("color", "#00ff00"))
 
-            # Each vertex is offset from the registration point and scaled,
-            # then placed relative to the canvas centre so the registration
-            # anchor always sits in the middle of the playback window.
             qpts = QPolygonF()
             for px, py in raw_pts:
                 cx = cx_centre + (px - reg_x) * scale
@@ -76,7 +129,9 @@ class _Canvas(QFrame):
             painter.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 180)))
             painter.drawPolygon(qpts)
 
-        # ── Frame counter ────────────────────────────────────────────────────
+        # ── Frame counter (drawn in screen space, not world space) ──────────
+        painter.resetTransform()
+        w, h = self.width(), self.height()
         counter_color = QColor(200, 200, 200, 160) if self.bg_color.lightness() < 128 else QColor(60, 60, 60, 160)
         painter.setPen(counter_color)
         font = QFont()
@@ -87,6 +142,75 @@ class _Canvas(QFrame):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
             f"Frame {self.current_frame} / {self.total_frames - 1}"
         )
+
+        # Zoom indicator (shown when not at 1×)
+        if abs(self._user_zoom - 1.0) > 0.01:
+            painter.drawText(
+                QRectF(0, 4, w - 4, 20),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+                f"{self._user_zoom:.1f}×"
+            )
+
+    # ── Mouse: zoom ──────────────────────────────────────────────────────────
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+
+        factor = self._ZOOM_STEP if delta > 0 else 1.0 / self._ZOOM_STEP
+        new_zoom = self._user_zoom * factor
+
+        # Anchor zoom to cursor position so the point under the mouse stays fixed
+        cursor = event.position()
+        cx, cy = self.width() / 2, self.height() / 2
+
+        # Current world position under cursor (before zoom change)
+        wx = (cursor.x() - cx - self._pan_x) / self._user_zoom
+        wy = (cursor.y() - cy - self._pan_y) / self._user_zoom
+
+        self._user_zoom = new_zoom
+
+        # Adjust pan so the world point stays under the cursor
+        self._pan_x = cursor.x() - cx - wx * self._user_zoom
+        self._pan_y = cursor.y() - cy - wy * self._user_zoom
+
+        self.update()
+        event.accept()
+
+    # ── Mouse: pan ───────────────────────────────────────────────────────────
+
+    def mousePressEvent(self, event):
+        is_pan = (
+            event.button() == Qt.MouseButton.MiddleButton
+            or (event.button() == Qt.MouseButton.LeftButton
+                and event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        )
+        if is_pan:
+            self._panning = True
+            self._pan_last = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._panning:
+            delta = event.position() - self._pan_last
+            self._pan_x += delta.x()
+            self._pan_y += delta.y()
+            self._pan_last = event.position()
+            self.update()
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._panning:
+            self._panning = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.reset_view()
+            event.accept()
 
 
 class PlaybackWindow(QDialog):
@@ -126,6 +250,11 @@ class PlaybackWindow(QDialog):
         self._bg_btn.clicked.connect(self._pick_bg_color)
         self._update_bg_btn_style(self._canvas.bg_color)
 
+        self._reset_btn = QPushButton("⤢ Reset View")
+        self._reset_btn.setFixedWidth(100)
+        self._reset_btn.setToolTip("Reset zoom and pan  (double-click canvas)")
+        self._reset_btn.clicked.connect(self._canvas.reset_view)
+
         self._frame_label = QLabel("Frame 0")
         self._frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -133,6 +262,7 @@ class PlaybackWindow(QDialog):
         ctrl_layout.addWidget(self._play_btn)
         ctrl_layout.addWidget(self._loop_btn)
         ctrl_layout.addWidget(self._bg_btn)
+        ctrl_layout.addWidget(self._reset_btn)
         ctrl_layout.addStretch()
         ctrl_layout.addWidget(self._frame_label)
 
