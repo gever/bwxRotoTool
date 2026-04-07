@@ -11,7 +11,7 @@ from PyQt6.QtGui import (QImage, QPixmap, QAction, QPolygonF, QPen, QBrush, QCol
 from PyQt6.QtCore import Qt, QPointF, QSizeF, QRectF, pyqtSignal
 
 from color_picker import ColorPickerDialog
-from video_processor import convert_to_15fps
+from video_processor import convert_to_15fps, flip_video
 from project_model import RotoProject
 from playback import PlaybackWindow
 
@@ -807,6 +807,13 @@ class RotoTool(QMainWindow):
         self.set_out_point_action.setToolTip("Set the Out-point to the current frame")
         self.set_out_point_action.triggered.connect(self._set_out_point)
 
+        # Video transforms
+        self.flip_h_action = QAction("Flip Horizontally", self)
+        self.flip_h_action.setToolTip(
+            "Mirror the video left-to-right and update all polygon/registration data"
+        )
+        self.flip_h_action.triggered.connect(self.flip_horizontal)
+
     def _create_menu(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
@@ -834,6 +841,8 @@ class RotoTool(QMainWindow):
         tools_menu.addSeparator()
         tools_menu.addAction(self.set_in_point_action)
         tools_menu.addAction(self.set_out_point_action)
+        tools_menu.addSeparator()
+        tools_menu.addAction(self.flip_h_action)
 
         window_menu = menubar.addMenu("Window")
         window_menu.addAction(self.open_playback_action)
@@ -1083,6 +1092,51 @@ class RotoTool(QMainWindow):
             self.project.start_frame = self.project.end_frame
         self.timeline_bar.set_in_out(self.project.start_frame, self.project.end_frame)
         self.set_status(f"Out-point set: frame {self.project.end_frame}")
+
+    def flip_horizontal(self):
+        """Flip the current video horizontally and mirror all polygon/registration data."""
+        if not self.cap:
+            QMessageBox.information(self, "No Video", "Please open a video project first.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Flip Horizontally",
+            "This will re-encode the video file and mirror all polygon data.\n"
+            "The original video file will be preserved with its current name.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Capture video width before we tear down the capture
+        video_width = self.scene.sceneRect().width()
+
+        src_path = self.project.video_path
+
+        progress = QProgressDialog("Flipping video horizontally…", None, 0, 0, self)
+        progress.setWindowTitle("Processing")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setCancelButton(None)
+        progress.show()
+        QApplication.processEvents()
+
+        out_path, err = flip_video(src_path, direction="hflip")
+        progress.close()
+
+        if not out_path:
+            QMessageBox.critical(self, "Flip Failed", err or "Unknown error during flip.")
+            return
+
+        # Mirror all stored polygon and registration coordinates
+        self.project.flip_horizontal(video_width)
+
+        # Point the project to the new (flipped) video and reload
+        self.project.video_path = out_path
+        self.load_video(out_path)
+        self._dirty = True
+        self.set_status("Video flipped horizontally — remember to save your project")
 
     def _open_playback_window(self):
         if not self.cap:

@@ -117,7 +117,26 @@ class RotoProject:
             return True
         return False
 
+    # ── Transforms ───────────────────────────────────────────────────────────
+
+    def flip_horizontal(self, video_width: float):
+        """Mirror all polygon points and registration coordinates horizontally.
+        For a video of width W, each x becomes W - x.
+        Call this AFTER the underlying video file has already been flipped."""
+        # Flip polygon points
+        for frame_idx, polys in self.frames.items():
+            for poly in polys:
+                flipped = []
+                for pt in poly.get("points", []):
+                    flipped.append([video_width - pt[0], pt[1]])
+                poly["points"] = flipped
+
+        # Flip registration points
+        for frame_idx, reg in self.registrations.items():
+            self.registrations[frame_idx] = [video_width - reg[0], reg[1]]
+
     # ── Export ───────────────────────────────────────────────────────────────
+
 
     def export_bwxbasic(self, filepath):
         """Exports the project in a format digestible by bwxBASIC (DATA statements).
