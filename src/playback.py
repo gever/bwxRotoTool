@@ -15,7 +15,7 @@ Zoom / pan controls
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QSizePolicy, QColorDialog, QFrame
+    QSizePolicy, QColorDialog, QFrame, QSlider
 )
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPolygonF, QFont, QTransform
 from PyQt6.QtCore import Qt, QTimer, QPointF, QSizeF, QRectF
@@ -256,6 +256,14 @@ class PlaybackWindow(QDialog):
         self._reset_btn.setToolTip("Reset zoom and pan  (double-click canvas)")
         self._reset_btn.clicked.connect(self._canvas.reset_view)
 
+        self._timeline = QSlider(Qt.Orientation.Horizontal)
+        start = project.start_frame if project else 0
+        end = project.end_frame if (project and project.end_frame is not None) else max(0, total_frames - 1)
+        self._timeline.setMinimum(start)
+        self._timeline.setMaximum(end)
+        self._timeline.setValue(self._canvas.current_frame)
+        self._timeline.valueChanged.connect(self._on_timeline_scrub)
+
         self._frame_label = QLabel("Frame 0")
         self._frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -265,13 +273,17 @@ class PlaybackWindow(QDialog):
         ctrl_layout.addWidget(self._bg_btn)
         ctrl_layout.addWidget(self._reset_btn)
         ctrl_layout.addStretch()
-        ctrl_layout.addWidget(self._frame_label)
+
+        slider_layout = QHBoxLayout()
+        slider_layout.addWidget(self._timeline)
+        slider_layout.addWidget(self._frame_label)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
         layout.addWidget(self._canvas)
         layout.addLayout(ctrl_layout)
+        layout.addLayout(slider_layout)
 
         # ── Timer ────────────────────────────────────────────────────────────
         self._timer = QTimer(self)
@@ -287,6 +299,15 @@ class PlaybackWindow(QDialog):
         self._canvas.project = project
         self._canvas.total_frames = total_frames
         self._canvas.video_size = video_size
+
+        start = project.start_frame if project else 0
+        end = project.end_frame if (project and project.end_frame is not None) else max(0, total_frames - 1)
+        end = min(end, total_frames - 1)
+        
+        self._timeline.blockSignals(True)
+        self._timeline.setMinimum(start)
+        self._timeline.setMaximum(end)
+        self._timeline.blockSignals(False)
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
@@ -310,7 +331,22 @@ class PlaybackWindow(QDialog):
                 self._play_btn.setText("▶ Play")
         self._canvas.current_frame = next_frame
         self._canvas.update()
+        
+        self._timeline.blockSignals(True)
+        self._timeline.setValue(next_frame)
+        self._timeline.blockSignals(False)
+        
         self._frame_label.setText(f"Frame {next_frame}  [{start}–{end}]")
+
+    def _on_timeline_scrub(self, frame):
+        self._canvas.current_frame = frame
+        self._canvas.update()
+        
+        project = self._project
+        start = project.start_frame if project else 0
+        end = project.end_frame if (project and project.end_frame is not None) else max(0, self._total_frames - 1)
+        end = min(end, self._total_frames - 1)
+        self._frame_label.setText(f"Frame {frame}  [{start}–{end}]")
 
     def _toggle_play(self):
         self._playing = not self._playing

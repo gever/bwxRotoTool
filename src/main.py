@@ -732,7 +732,7 @@ class RotoTool(QMainWindow):
                 self.palette_bar.set_history(self.color_history)
                 last_proj = data.get("last_project")
                 if last_proj and os.path.exists(last_proj):
-                    reply = QMessageBox.question(self, "Resume Last Project", f"Would you like to resume your last project?\n\n{last_proj}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                    reply = QMessageBox.question(self, "Resume Last Project", f"Would you like to resume your last project?\n\n{last_proj}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
                     if reply == QMessageBox.StandardButton.Yes:
                         self.load_project_file(last_proj)
             except Exception:
