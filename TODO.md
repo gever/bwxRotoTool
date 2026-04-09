@@ -24,4 +24,4 @@
 - [ ] FEAT19: add "onion-skin prev frame <o>" and "onion-skin prev/next frame<O>" commands to the View menu
 - [ ] FEAT20: support <space> to toggle transparency in playback window
 - [ ] FEAT21: add support for copy/paste of polygons with <ctrl-A> to select all (make sure the Edit menu is updated, make sure backspace deletes all currently selected polygons)
- 
+- [ ] FEAT22: add support for auto-save when a polygon is completed
