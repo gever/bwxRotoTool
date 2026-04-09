@@ -23,4 +23,7 @@
 - [X] FEAT16: add support for adding a vertex to a polygon by ctrl-clicking on an edge.
 - [x] FEAT17: make "Yes" the default answer when starting the app and offering to open the most recent project.
 - [x] FEAT18: add a scrubbable timeline to the playback window to allow for frame-by-frame scrubbing.
-
+- [ ] FEAT19: add "onion-skin prev frame <o>" and "onion-skin prev/next frame<O>" commands to the View menu
+- [ ] FEAT20: support <space> to toggle transparency in playback window
+- [ ] FEAT21: add support for copy/paste of polygons with <ctrl-A> to select all (make sure the Edit menu is updated, make sure backspace deletes all currently selected polygons)
+ 
