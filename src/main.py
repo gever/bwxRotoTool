@@ -802,6 +802,15 @@ class RotoTool(QMainWindow):
         self.show_reg_action.setShortcut("Ctrl+Shift+R")
         self.show_reg_action.triggered.connect(self._toggle_reg_visibility)
 
+        # Onion skins
+        self.onion_prev_action = QAction("onion-skin prev frame <n>", self)
+        self.onion_prev_action.setShortcut("n")
+        self.onion_prev_action.triggered.connect(self._toggle_onion_prev)
+
+        self.onion_both_action = QAction("onion-skin prev/next frame<N>", self)
+        self.onion_both_action.setShortcut("Shift+N")
+        self.onion_both_action.triggered.connect(self._toggle_onion_both)
+
         # Playback window
         self.open_playback_action = QAction("Open Playback Preview", self)
         self.open_playback_action.setShortcut("Ctrl+Shift+P")
@@ -821,7 +830,7 @@ class RotoTool(QMainWindow):
         self.set_in_point_action.triggered.connect(self._set_in_point)
 
         self.set_out_point_action = QAction("Set Out-point", self)
-        self.set_out_point_action.setShortcut("E")
+        self.set_out_point_action.setShortcut("O")
         self.set_out_point_action.setToolTip("Set the Out-point to the current frame")
         self.set_out_point_action.triggered.connect(self._set_out_point)
 
@@ -856,6 +865,9 @@ class RotoTool(QMainWindow):
         view_menu.addAction(self.zoom_fit_action)
         view_menu.addSeparator()
         view_menu.addAction(self.show_reg_action)
+        view_menu.addSeparator()
+        view_menu.addAction(self.onion_prev_action)
+        view_menu.addAction(self.onion_both_action)
 
         tools_menu = menubar.addMenu("Tools")
         tools_menu.addAction(self.estimate_registration_action)
@@ -1132,6 +1144,18 @@ class RotoTool(QMainWindow):
     def _toggle_reg_visibility(self):
         self.show_registration = self.show_reg_action.isChecked()
         self._place_registration_marker()
+
+    def _toggle_onion_prev(self):
+        self.onion_mode = None if self.onion_mode == "prev" else "prev"
+        self.redraw_polygons()
+        onion_label = {None: "OFF", "prev": "PREV", "both": "PREV+NEXT"}.get(self.onion_mode, "")
+        self.set_status(f"Onion skin: {onion_label}")
+
+    def _toggle_onion_both(self):
+        self.onion_mode = None if self.onion_mode == "both" else "both"
+        self.redraw_polygons()
+        onion_label = {None: "OFF", "prev": "PREV", "both": "PREV+NEXT"}.get(self.onion_mode, "")
+        self.set_status(f"Onion skin: {onion_label}")
 
     def estimate_registration(self):
         """Set the current frame's registration point to the centroid of all
@@ -1597,8 +1621,8 @@ class RotoTool(QMainWindow):
             self._set_in_point()
             return
 
-        # Set End/Out-point  (E)
-        if key == Qt.Key.Key_E and not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+        # Set End/Out-point  (O)
+        if key == Qt.Key.Key_O and not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
             self._set_out_point()
             return
 
@@ -1615,13 +1639,13 @@ class RotoTool(QMainWindow):
                     self.set_status("No previous registration point to copy")
             return
 
-        # Onion skin toggle  (o = prev only, Shift+O = prev+next)
-        if key == Qt.Key.Key_O:
+        # Onion skin toggle  (n = prev only, Shift+N = prev+next)
+        if key == Qt.Key.Key_N:
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                # Shift+O: toggle both-direction onion skin
+                # Shift+N: toggle both-direction onion skin
                 self.onion_mode = None if self.onion_mode == "both" else "both"
             else:
-                # o: toggle previous-frame onion skin
+                # n: toggle previous-frame onion skin
                 self.onion_mode = None if self.onion_mode == "prev" else "prev"
             self.redraw_polygons()
             onion_label = {None: "OFF", "prev": "PREV", "both": "PREV+NEXT"}.get(self.onion_mode, "")
