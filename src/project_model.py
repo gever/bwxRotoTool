@@ -138,6 +138,50 @@ class RotoProject:
     # ── Export / Import ──────────────────────────────────────────────────────
 
 
+    def export_lua(self, filepath):
+        """Export polygon + registration data as a LUA table.
+        
+        The format returns a Lua table compatible with LOVE2D or other Lua engines.
+        """
+        with open(filepath, 'w') as f:
+            f.write("-- bwxRotoTool LUA Export\n")
+            f.write("return {\n")
+            f.write("  meta = { tool = \"bwxRotoTool\", version = 1 },\n")
+            
+            f.write("  frames = {\n")
+            for frame_idx in sorted(self.frames.keys()):
+                f.write(f"    [{frame_idx}] = {{\n")
+                
+                sorted_polys = sorted(self.frames[frame_idx], key=lambda p: p.get("z_index", 0))
+                for poly_idx, poly_dict in enumerate(sorted_polys):
+                    points = poly_dict.get("points", [])
+                    color = poly_dict.get("color", "#00ff00")
+                    z_index = poly_dict.get("z_index", 0)
+                    if not points:
+                        continue
+                    
+                    points_flat = []
+                    for pt in points:
+                        # raw video coords
+                        points_flat.append(f"{pt[0]:.2f}")
+                        points_flat.append(f"{pt[1]:.2f}")
+                    
+                    points_str = ", ".join(points_flat)
+                    f.write(f"      {{\n")
+                    f.write(f"        color = \"{color}\",\n")
+                    f.write(f"        z_index = {z_index},\n")
+                    f.write(f"        points = {{ {points_str} }}\n")
+                    f.write(f"      }},\n")
+                f.write(f"    }},\n")
+            f.write("  },\n")
+            
+            f.write("  registrations = {\n")
+            for frame_idx in sorted(self.registrations.keys()):
+                reg = self.registrations[frame_idx]
+                f.write(f"    [{frame_idx}] = {{ {reg[0]:.2f}, {reg[1]:.2f} }},\n")
+            f.write("  }\n")
+            f.write("}\n")
+
     def export_json(self, filepath):
         """Export polygon + registration data as a clean JSON file.
 

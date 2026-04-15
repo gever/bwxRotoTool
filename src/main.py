@@ -772,6 +772,10 @@ class RotoTool(QMainWindow):
         self.export_json_action.setToolTip("Export all frames as a clean JSON file (for p5.js or other tools)")
         self.export_json_action.triggered.connect(self.export_json)
 
+        self.export_lua_action = QAction("Export Polygon Data as LUA...", self)
+        self.export_lua_action.setToolTip("Export all frames as a LUA table (for LOVE2D or other LUA engines)")
+        self.export_lua_action.triggered.connect(self.export_lua)
+
         self.import_json_action = QAction("Import Polygon Data from JSON...", self)
         self.import_json_action.setToolTip("Import polygon data from a bwxRotoTool JSON export")
         self.import_json_action.triggered.connect(self.import_json_data)
@@ -852,6 +856,7 @@ class RotoTool(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.export_bwx_action)
         file_menu.addAction(self.export_json_action)
+        file_menu.addAction(self.export_lua_action)
         file_menu.addSeparator()
         file_menu.addAction(self.import_json_action)
         
@@ -979,6 +984,22 @@ class RotoTool(QMainWindow):
             self.set_status(f"Exported {n_frames} frame(s) to {os.path.basename(filepath)}")
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", f"Could not write JSON:\n{e}")
+
+    def export_lua(self):
+        """Export all polygon + registration data to a clean LUA file."""
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Export Polygon Data as LUA", "", "LUA Files (*.lua)"
+        )
+        if not filepath:
+            return
+        if not filepath.endswith('.lua'):
+            filepath += '.lua'
+        try:
+            self.project.export_lua(filepath)
+            n_frames = len(self.project.frames)
+            self.set_status(f"Exported {n_frames} frame(s) to {os.path.basename(filepath)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write LUA:\n{e}")
 
     def import_json_data(self):
         """Import polygon data from a JSON file, prompting the user to choose a merge strategy."""
