@@ -17,7 +17,7 @@ This tool forces a 15 fps workflow regardless of the source video's frame rate. 
 ## Project Structure
 * `/src`: The Python source code.
 * `/data`: JSON exports of the rotoscoped paths.
-* `/video`: Source footage (Use Git LFS for these!).
+* `/video`: Source footage.
 
 ## Quick Start
 1. Build the venv and install dependencies: `make setup`
