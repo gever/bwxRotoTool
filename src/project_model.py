@@ -146,13 +146,16 @@ class RotoProject:
         with open(filepath, 'w') as f:
             f.write("-- bwxRotoTool LUA Export\n")
             f.write("return {\n")
-            f.write("  meta = { tool = \"bwxRotoTool\", version = 1 },\n")
+            f.write(f"  meta = {{ tool = \"bwxRotoTool\", version = 1, frame_count = {len(self.frames)} }},\n")
             
             f.write("  frames = {\n")
             for frame_idx in sorted(self.frames.keys()):
-                f.write(f"    [{frame_idx}] = {{\n")
-                
                 sorted_polys = sorted(self.frames[frame_idx], key=lambda p: p.get("z_index", 0))
+                f.write(f"    {{\n")
+                f.write(f"      frame = {frame_idx},\n")
+                f.write(f"      poly_count = {len(sorted_polys)},\n")
+                f.write(f"      polys = {{\n")
+                
                 for poly_idx, poly_dict in enumerate(sorted_polys):
                     points = poly_dict.get("points", [])
                     color = poly_dict.get("color", "#00ff00")
@@ -167,11 +170,12 @@ class RotoProject:
                         points_flat.append(f"{pt[1]:.2f}")
                     
                     points_str = ", ".join(points_flat)
-                    f.write(f"      {{\n")
-                    f.write(f"        color = \"{color}\",\n")
-                    f.write(f"        z_index = {z_index},\n")
-                    f.write(f"        points = {{ {points_str} }}\n")
-                    f.write(f"      }},\n")
+                    f.write(f"        {{\n")
+                    f.write(f"          color = \"{color}\",\n")
+                    f.write(f"          z_index = {z_index},\n")
+                    f.write(f"          points = {{ {points_str} }}\n")
+                    f.write(f"        }},\n")
+                f.write(f"      }}\n")
                 f.write(f"    }},\n")
             f.write("  },\n")
             
@@ -192,25 +196,44 @@ class RotoProject:
         ------
         {
           "meta": {"tool": "bwxRotoTool", "version": 1},
-          "frames": {
-            "0": [
-              {"color": "#00ff00", "z_index": 1,
-               "points": [[x1, y1], [x2, y2], ...]},
-              ...
-            ],
+          "frames": [
+            {
+               "frame": 0,
+               "poly_count": 1,
+               "polys": [
+                 {"color": "#00ff00", "z_index": 1,
+                  "points": [x1, y1, x2, y2, ...]}
+               ]
+            },
             ...
-          },
+          ],
           "registrations": {
             "0": [rx, ry],
             ...
           }
         }
-
-        All frame and registration keys are strings (JSON requirement).
         """
+        frames_list = []
+        for k in sorted(self.frames.keys()):
+            sorted_polys = sorted(self.frames[k], key=lambda p: p.get("z_index", 0))
+            polys_list = []
+            for poly in sorted_polys:
+                pts = [round(c, 2) for pt in poly.get("points", []) for c in pt]
+                if pts:
+                    polys_list.append({
+                        "color": poly.get("color", "#00ff00"),
+                        "z_index": poly.get("z_index", 0),
+                        "points": pts
+                    })
+            frames_list.append({
+                "frame": k,
+                "poly_count": len(polys_list),
+                "polys": polys_list
+            })
+            
         data = {
-            "meta": {"tool": "bwxRotoTool", "version": 1},
-            "frames": {str(k): v for k, v in self.frames.items()},
+            "meta": {"tool": "bwxRotoTool", "version": 1, "frame_count": len(self.frames)},
+            "frames": frames_list,
             "registrations": {str(k): v for k, v in self.registrations.items()},
         }
         with open(filepath, "w") as f:
@@ -241,29 +264,50 @@ class RotoProject:
             data = json.load(f)
 
         # Support both the export_json format (has "meta" key) and raw
-        # {frame_idx: [polys]} dicts for basic compatibility.
+        # dictionaries for backwards compatibility.
         if "frames" in data:
             raw_frames = data["frames"]
             raw_regs   = data.get("registrations", {})
         else:
-            # Assume it's a bare {frame_idx: [polys]} mapping
             raw_frames = data
             raw_regs   = {}
 
-        # Validate and migrate polygon entries (same logic as from_dict)
         imported_frames = {}
-        for k, polys in raw_frames.items():
-            if not isinstance(polys, list):
-                raise ValueError(f"Frame '{k}' is not a list of polygons.")
-            migrated = []
-            for poly in polys:
-                if isinstance(poly, list):
-                    migrated.append({"points": poly, "color": "#00ff00", "z_index": 0})
-                elif isinstance(poly, dict) and "points" in poly:
-                    migrated.append(poly)
-                else:
-                    raise ValueError(f"Unexpected polygon entry in frame '{k}': {poly!r}")
-            imported_frames[int(k)] = migrated
+        if isinstance(raw_frames, list):
+            # New format (array of frame objects)
+            for frame_data in raw_frames:
+                k = frame_data.get("frame")
+                if k is None:
+                    continue
+                polys = frame_data.get("polys", [])
+                migrated = []
+                for poly in polys:
+                    if isinstance(poly, dict) and "points" in poly:
+                        pts = poly["points"]
+                        if len(pts) > 0 and not isinstance(pts[0], list):
+                            pts = [[pts[i], pts[i+1]] for i in range(0, len(pts)-1, 2)]
+                        # make sure we clone the dict if needed, or modify in place
+                        poly["points"] = pts
+                        migrated.append(poly)
+                imported_frames[int(k)] = migrated
+        else:
+            # Old format (dictionary mapping frame numbers to polygon lists)
+            for k, polys in raw_frames.items():
+                if not isinstance(polys, list):
+                    raise ValueError(f"Frame '{k}' is not a list of polygons.")
+                migrated = []
+                for poly in polys:
+                    if isinstance(poly, list):
+                        migrated.append({"points": poly, "color": "#00ff00", "z_index": 0})
+                    elif isinstance(poly, dict) and "points" in poly:
+                        pts = poly["points"]
+                        if len(pts) > 0 and not isinstance(pts[0], list):
+                            pts = [[pts[i], pts[i+1]] for i in range(0, len(pts)-1, 2)]
+                            poly["points"] = pts
+                        migrated.append(poly)
+                    else:
+                        raise ValueError(f"Unexpected polygon entry in frame '{k}': {poly!r}")
+                imported_frames[int(k)] = migrated
 
         imported_regs = {int(k): v for k, v in raw_regs.items()}
 
