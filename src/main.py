@@ -628,7 +628,7 @@ class RotoGraphicsView(QGraphicsView):
 class RotoTool(QMainWindow):
     def __init__(self, initial_video=None):
         super().__init__()
-        self.setWindowTitle("Antigravity Roto-Tool [15 FPS]")
+        self.setWindowTitle("Brightworks Roto-Tool [15 FPS]")
         self.resize(1024, 768)
 
         self.project = RotoProject()
@@ -911,7 +911,7 @@ class RotoTool(QMainWindow):
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.current_game_frame = 0
         self.project.video_path = filepath
-        self.setWindowTitle(f"Antigravity Roto-Tool - {os.path.basename(filepath)}")
+        self.setWindowTitle(f"Brightworks Roto-Tool - {os.path.basename(filepath)}")
         self.current_points = []
         self.view.resetTransform()
         self._update_timeline()
