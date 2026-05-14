@@ -151,9 +151,11 @@ class RotoProject:
             f.write("  frames = {\n")
             for frame_idx in sorted(self.frames.keys()):
                 sorted_polys = sorted(self.frames[frame_idx], key=lambda p: p.get("z_index", 0))
+                reg = self.get_registration(frame_idx)
                 f.write(f"    {{\n")
                 f.write(f"      frame = {frame_idx},\n")
                 f.write(f"      poly_count = {len(sorted_polys)},\n")
+                f.write(f"      registration = {{ {reg[0]:.2f}, {reg[1]:.2f} }},\n")
                 f.write(f"      polys = {{\n")
                 
                 for poly_idx, poly_dict in enumerate(sorted_polys):
@@ -228,6 +230,7 @@ class RotoProject:
             frames_list.append({
                 "frame": k,
                 "poly_count": len(polys_list),
+                "registration": self.get_registration(k),
                 "polys": polys_list
             })
             
@@ -273,6 +276,7 @@ class RotoProject:
             raw_regs   = {}
 
         imported_frames = {}
+        imported_regs = {int(k): v for k, v in raw_regs.items()}
         if isinstance(raw_frames, list):
             # New format (array of frame objects)
             for frame_data in raw_frames:
@@ -280,6 +284,11 @@ class RotoProject:
                 if k is None:
                     continue
                 polys = frame_data.get("polys", [])
+                
+                # Load registration point if present in frame object
+                reg = frame_data.get("registration")
+                if reg is not None:
+                    imported_regs[int(k)] = reg
                 migrated = []
                 for poly in polys:
                     if isinstance(poly, dict) and "points" in poly:
@@ -308,8 +317,6 @@ class RotoProject:
                     else:
                         raise ValueError(f"Unexpected polygon entry in frame '{k}': {poly!r}")
                 imported_frames[int(k)] = migrated
-
-        imported_regs = {int(k): v for k, v in raw_regs.items()}
 
         imported = 0
         skipped  = 0
@@ -358,6 +365,7 @@ class RotoProject:
 
                 # Write a registration comment so the game engine can reconstruct world-space paths
                 f.write(f"' Frame {frame_idx} registration: {int(reg_x)}, {int(reg_y)}\n")
+                f.write(f"DATA {frame_idx}, -1, {int(reg_x)}, {int(reg_y)}\n")
 
                 # Sort the polygons in this frame by z_index
                 sorted_polys = sorted(self.frames[frame_idx], key=lambda p: p.get("z_index", 0))
